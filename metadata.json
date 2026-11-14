@@ -1,0 +1,6 @@
+{
+  "name": "Royale Casino",
+  "description": "A high-fidelity mobile casino experience featuring Video Poker, 5-Reel Multi-line Slots, Blackjack, and European Roulette with realistic felt physics and chip betting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

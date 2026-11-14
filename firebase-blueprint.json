@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "Public casino player progression entry on the global XP leaderboard (strictly excludes PII).",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID matching the document ID."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Public casino player moniker shown on the global Top 100 leaderboard (1-30 chars)."
+        },
+        "totalXp": {
+          "type": "integer",
+          "description": "Total cumulative XP earned across casino sessions (>= 0)."
+        },
+        "level": {
+          "type": "integer",
+          "description": "Current player VIP progression level (>= 1)."
+        },
+        "vipTitle": {
+          "type": "string",
+          "description": "Display title of the player's current VIP tier."
+        },
+        "bestWinStreak": {
+          "type": "integer",
+          "description": "Highest consecutive winning rounds achieved (>= 0)."
+        },
+        "biggestWin": {
+          "type": "integer",
+          "description": "Largest single-round chip payout achieved (>= 0)."
+        },
+        "totalRoundsPlayed": {
+          "type": "integer",
+          "description": "Total rounds played across Poker, Slots, Blackjack, and Roulette (>= 0)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the leaderboard entry was first created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the leaderboard entry was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "totalXp",
+        "level",
+        "vipTitle",
+        "bestWinStreak",
+        "biggestWin",
+        "totalRoundsPlayed",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/leaderboard/{userId}": {
+      "schema": {
+        "$ref": "#/entities/LeaderboardEntry"
+      },
+      "description": "Global leaderboard ordered by totalXp descending; readable by signed-in players, writable only by the matching userId owner."
+    }
+  }
+}
