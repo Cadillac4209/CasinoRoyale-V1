@@ -4,15 +4,22 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.example.model.BlackjackVariant
 import com.example.model.CardBackTheme
+import com.example.model.DailyBonusWheelCatalog
+import com.example.model.DailyLoginRecord
+import com.example.model.DailyWheelSpinResult
+import com.example.model.DailyWheelStatus
 import com.example.model.FeltTheme
 import com.example.model.GameSpeed
 import com.example.model.GameType
+import com.example.model.WheelPrizeType
 import com.example.model.LevelMilestone
+import com.example.model.LoyaltyRewardUnlockResult
 import com.example.model.PlayerProfile
 import com.example.model.PlayerStats
 import com.example.model.PokerVariant
 import com.example.model.ProgressionManager
 import com.example.model.RouletteVariant
+import com.example.model.RoyaleLoyaltyCatalog
 import com.example.model.SlotsVariant
 import com.example.model.VoidTransaction
 import com.example.model.VoidTxType
@@ -21,6 +28,7 @@ import com.example.model.CheckInDayReward
 import com.example.model.CheckInStreakStatus
 import com.example.model.DailyCheckInClaimResult
 import com.example.model.DailyCheckInSchedule
+import com.example.model.MissionClaimResult
 import com.example.data.local.CasinoDatabase
 import com.example.data.local.dao.ActiveGameStateDao
 import com.example.data.local.dao.CurrencyDao
@@ -44,6 +52,7 @@ class CasinoRepository(context: Context) {
     val currencyRepository: CurrencyRepository = CurrencyRepository(currencyDao)
     val activeGameStateDao: ActiveGameStateDao = database.activeGameStateDao()
     val activeGameRepository: ActiveGameRepository = ActiveGameRepository(activeGameStateDao)
+    val missionsRepository: MissionsRepository = MissionsRepository(context)
     private val ioScope = CoroutineScope(Dispatchers.IO)
 
     private val _profile = MutableStateFlow(loadProfile())
@@ -57,7 +66,10 @@ class CasinoRepository(context: Context) {
     private val _latestLevelUp = MutableStateFlow<LevelMilestone?>(null)
     val latestLevelUp: StateFlow<LevelMilestone?> = _latestLevelUp.asStateFlow()
 
+    var onWagerRecorded: ((Long) -> Unit)? = null
+
     init {
+        missionsRepository.syncWithProfile(_profile.value)
         // Sync Room database with player currency on startup
         ioScope.launch {
             val existing = currencyDao.getPlayerCurrency()
@@ -78,6 +90,7 @@ class CasinoRepository(context: Context) {
                     )
                 )
                 _profile.value = updated
+                missionsRepository.syncWithProfile(updated)
             } else {
                 val current = _profile.value
                 currencyDao.insertOrUpdateCurrency(
@@ -113,6 +126,7 @@ class CasinoRepository(context: Context) {
             slotsSpins = prefs.getInt("stat_slots_spins", 0),
             blackjackHands = prefs.getInt("stat_bj_hands", 0),
             rouletteSpins = prefs.getInt("stat_rl_spins", 0),
+            baccaratHands = prefs.getInt("stat_bc_hands", 0),
             totalJackpots = prefs.getInt("stat_jackpots", 0),
             totalLevelUps = prefs.getInt("stat_level_ups", 0),
             totalVoidEarned = prefs.getLong("stat_void_earned", 10L),
@@ -142,10 +156,24 @@ class CasinoRepository(context: Context) {
             stakedAmount = savedVoidStaked
         )
 
+        val totalWageredPref = prefs.getLong("stat_total_wagered", 0L)
+        val hasSavedLoyalty = prefs.contains("lifetime_royale_points")
+        val seededFromVolume = if (!hasSavedLoyalty && totalWageredPref > 0L) {
+            (totalWageredPref / RoyaleLoyaltyCatalog.CHIPS_PER_BASE_POINT).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        val royalePoints = if (hasSavedLoyalty) prefs.getLong("royale_points", 0L).coerceAtLeast(0L) else seededFromVolume
+        val lifetimeRoyalePoints = if (hasSavedLoyalty) prefs.getLong("lifetime_royale_points", 0L).coerceAtLeast(0L) else seededFromVolume
+        val unlockedLoyaltyRewards = prefs.getStringSet("unlocked_loyalty_rewards", emptySet())?.toSet() ?: emptySet()
+
         return PlayerProfile(
             bankroll = bankroll,
             xp = xp,
             lastDailyBonusTime = lastDaily,
+            royalePoints = royalePoints,
+            lifetimeRoyalePoints = lifetimeRoyalePoints,
+            unlockedLoyaltyRewardIds = unlockedLoyaltyRewards,
             stats = stats,
             selectedFelt = felt,
             selectedCardBack = cardBack,
@@ -170,6 +198,7 @@ class CasinoRepository(context: Context) {
             putInt("stat_slots_spins", p.stats.slotsSpins)
             putInt("stat_bj_hands", p.stats.blackjackHands)
             putInt("stat_rl_spins", p.stats.rouletteSpins)
+            putInt("stat_bc_hands", p.stats.baccaratHands)
             putInt("stat_jackpots", p.stats.totalJackpots)
             putInt("stat_level_ups", p.stats.totalLevelUps)
             putLong("stat_void_earned", p.stats.totalVoidEarned)
@@ -188,6 +217,9 @@ class CasinoRepository(context: Context) {
             putLong("void_wallet_balance", p.voidWallet.balance)
             putLong("void_wallet_staked", p.voidWallet.stakedAmount)
             putString("void_solana_address", p.voidWallet.solanaAddress)
+            putLong("royale_points", p.royalePoints)
+            putLong("lifetime_royale_points", p.lifetimeRoyalePoints)
+            putStringSet("unlocked_loyalty_rewards", p.unlockedLoyaltyRewardIds.toSet())
             apply()
         }
 
@@ -241,15 +273,22 @@ class CasinoRepository(context: Context) {
         val xpGain = (baseGain * voidMultiplier).toLong()
         val newXp = current.xp + xpGain
 
+        // Earn Royale Loyalty Points proportional to gameplay volume & loyalty tier
+        val earnedRoyalePoints = RoyaleLoyaltyCatalog.calculatePointsEarned(amount, current.loyaltyTier)
+
         val updated = current.copy(
             bankroll = current.bankroll - amount,
             xp = newXp,
+            royalePoints = current.royalePoints + earnedRoyalePoints,
+            lifetimeRoyalePoints = current.lifetimeRoyalePoints + earnedRoyalePoints,
             stats = current.stats.copy(
                 totalWagered = current.stats.totalWagered + amount
             )
         )
         _profile.value = updated
         saveProfile(updated)
+        missionsRepository.syncWithProfile(updated)
+        onWagerRecorded?.invoke(amount)
 
         ioScope.launch {
             currencyDao.insertTransaction(
@@ -314,6 +353,7 @@ class CasinoRepository(context: Context) {
             slotsSpins = if (gameType == GameType.SLOTS) current.stats.slotsSpins + 1 else current.stats.slotsSpins,
             blackjackHands = if (gameType == GameType.BLACKJACK) current.stats.blackjackHands + 1 else current.stats.blackjackHands,
             rouletteSpins = if (gameType == GameType.ROULETTE) current.stats.rouletteSpins + 1 else current.stats.rouletteSpins,
+            baccaratHands = if (gameType == GameType.BACCARAT) current.stats.baccaratHands + 1 else current.stats.baccaratHands,
             totalJackpots = if (isJackpot) current.stats.totalJackpots + 1 else current.stats.totalJackpots,
             totalVoidEarned = current.stats.totalVoidEarned + voidMinted,
             currentWinStreak = newStreak,
@@ -328,6 +368,7 @@ class CasinoRepository(context: Context) {
         )
         _profile.value = updated
         saveProfile(updated)
+        missionsRepository.recordRoundFinished(gameType = gameType, isWin = true, profile = updated)
 
         ioScope.launch {
             currencyDao.insertTransaction(
@@ -351,11 +392,13 @@ class CasinoRepository(context: Context) {
             videoPokerHands = if (gameType == GameType.VIDEO_POKER) current.stats.videoPokerHands + 1 else current.stats.videoPokerHands,
             slotsSpins = if (gameType == GameType.SLOTS) current.stats.slotsSpins + 1 else current.stats.slotsSpins,
             blackjackHands = if (gameType == GameType.BLACKJACK) current.stats.blackjackHands + 1 else current.stats.blackjackHands,
-            rouletteSpins = if (gameType == GameType.ROULETTE) current.stats.rouletteSpins + 1 else current.stats.rouletteSpins
+            rouletteSpins = if (gameType == GameType.ROULETTE) current.stats.rouletteSpins + 1 else current.stats.rouletteSpins,
+            baccaratHands = if (gameType == GameType.BACCARAT) current.stats.baccaratHands + 1 else current.stats.baccaratHands
         )
         val updated = current.copy(stats = newStats)
         _profile.value = updated
         saveProfile(updated)
+        missionsRepository.recordRoundFinished(gameType = gameType, isWin = false, profile = updated)
     }
 
     private fun checkLevelUp(oldLevel: Int, newLevel: Int) {
@@ -552,6 +595,74 @@ class CasinoRepository(context: Context) {
         }
     }
 
+    fun getDailyWheelStatus(currentTimeMs: Long = System.currentTimeMillis()): DailyWheelStatus {
+        return DailyBonusWheelCatalog.evaluateStatus(
+            lastSpinTimestampMs = _profile.value.lastDailyBonusTime,
+            currentTimeMs = currentTimeMs
+        )
+    }
+
+    fun claimDailyWheelSpin(
+        sliceIndex: Int,
+        nowMs: Long = System.currentTimeMillis()
+    ): DailyWheelSpinResult? {
+        val status = getDailyWheelStatus(nowMs)
+        if (!status.canSpin) return null
+
+        val current = _profile.value
+        val safeIndex = sliceIndex.coerceIn(0, DailyBonusWheelCatalog.slices.lastIndex)
+        val slice = DailyBonusWheelCatalog.slices[safeIndex]
+
+        val chipsAwarded: Long
+        val royalePointsAwarded: Long
+        when (slice.prizeType) {
+            WheelPrizeType.VIRTUAL_CHIPS -> {
+                val voidBonusMultiplier = current.voidWallet.activePowerTier.bonusMultiplier
+                chipsAwarded = (slice.amount * voidBonusMultiplier).toLong()
+                royalePointsAwarded = 0L
+            }
+            WheelPrizeType.ROYALE_POINTS -> {
+                chipsAwarded = 0L
+                royalePointsAwarded = slice.amount
+            }
+        }
+
+        val updated = current.copy(
+            bankroll = current.bankroll + chipsAwarded,
+            royalePoints = current.royalePoints + royalePointsAwarded,
+            lifetimeRoyalePoints = current.lifetimeRoyalePoints + royalePointsAwarded,
+            lastDailyBonusTime = nowMs
+        )
+        _profile.value = updated
+        saveProfile(updated)
+        missionsRepository.syncWithProfile(updated)
+
+        ioScope.launch {
+            currencyDao.insertTransaction(
+                CurrencyTransactionEntity(
+                    gameType = "DAILY_WHEEL",
+                    amountDelta = chipsAwarded,
+                    balanceAfter = updated.bankroll,
+                    note = if (chipsAwarded > 0L) {
+                        "Daily Wheel Spin: +$$chipsAwarded Chips"
+                    } else {
+                        "Daily Wheel Spin: +$royalePointsAwarded Royale Points"
+                    }
+                )
+            )
+        }
+
+        return DailyWheelSpinResult(
+            slice = slice,
+            chipsAwarded = chipsAwarded,
+            royalePointsAwarded = royalePointsAwarded,
+            newBankroll = updated.bankroll,
+            newRoyalePoints = updated.royalePoints,
+            newLifetimeRoyalePoints = updated.lifetimeRoyalePoints,
+            claimedAtMs = nowMs
+        )
+    }
+
     fun claimDailyBonus(amount: Long) {
         val current = _profile.value
         // Apply active Void bonus multiplier!
@@ -732,6 +843,37 @@ class CasinoRepository(context: Context) {
         saveProfile(updated)
     }
 
+    fun syncCheckInStreakFromFirestore(record: DailyLoginRecord) {
+        val current = _profile.value
+        val stats = current.stats
+        val cloudClaimMs = record.lastBonusClaimAt?.toDate()?.time ?: 0L
+        val shouldHydrateFromCloud =
+            record.totalCheckIns > stats.totalCheckIns ||
+                (stats.lastCheckInTimestamp == 0L && record.totalCheckIns > 0 && cloudClaimMs > 0L)
+        if (!shouldHydrateFromCloud) return
+
+        val updatedStats = stats.copy(
+            checkInStreak = maxOf(stats.checkInStreak, record.currentStreak),
+            bestCheckInStreak = maxOf(stats.bestCheckInStreak, record.bestStreak),
+            totalCheckIns = maxOf(stats.totalCheckIns, record.totalCheckIns),
+            lastCheckInTimestamp = if (cloudClaimMs > 0L) cloudClaimMs else stats.lastCheckInTimestamp
+        )
+        val updated = current.copy(stats = updatedStats)
+        _profile.value = updated
+        saveProfile(updated)
+    }
+
+    fun syncWheelSpinFromFirestore(record: DailyLoginRecord) {
+        val cloudWheelMs = record.lastWheelSpinAt?.toDate()?.time ?: 0L
+        if (cloudWheelMs <= 0L) return
+        val current = _profile.value
+        if (cloudWheelMs > current.lastDailyBonusTime) {
+            val updated = current.copy(lastDailyBonusTime = cloudWheelMs)
+            _profile.value = updated
+            saveProfile(updated)
+        }
+    }
+
     fun getPlayerDisplayName(defaultName: String): String {
         val saved = prefs.getString("player_display_name", null)?.trim()
         return if (!saved.isNullOrBlank()) saved else defaultName.trim().ifBlank { "Fire Kern Player" }.take(32)
@@ -748,4 +890,117 @@ class CasinoRepository(context: Context) {
     }
 
     fun scaleDelay(baseMs: Long): Long = _gameSpeed.value.scaleDelay(baseMs)
+
+    fun claimMissionReward(missionId: String): MissionClaimResult? {
+        val current = _profile.value
+        val mission = missionsRepository.claimMission(missionId, current) ?: return null
+        val oldLevel = current.level
+
+        val updatedWallet = if (mission.rewardVoid > 0L) {
+            val newTx = VoidTransaction(
+                id = UUID.randomUUID().toString(),
+                type = VoidTxType.MINT_REWARD,
+                amount = mission.rewardVoid,
+                txHash = generateTxHash(),
+                timestamp = System.currentTimeMillis(),
+                note = "Mission Reward: ${mission.title} (+${mission.rewardVoid} \$VOID)"
+            )
+            current.voidWallet.copy(
+                balance = current.voidWallet.balance + mission.rewardVoid,
+                transactions = listOf(newTx) + current.voidWallet.transactions.take(20)
+            )
+        } else {
+            current.voidWallet
+        }
+
+        val updated = current.copy(
+            bankroll = current.bankroll + mission.rewardChips,
+            xp = current.xp + mission.rewardXp,
+            stats = current.stats.copy(
+                totalVoidEarned = current.stats.totalVoidEarned + mission.rewardVoid
+            ),
+            voidWallet = updatedWallet
+        )
+        _profile.value = updated
+        saveProfile(updated)
+        missionsRepository.syncWithProfile(updated)
+
+        ioScope.launch {
+            currencyDao.insertTransaction(
+                CurrencyTransactionEntity(
+                    gameType = "MISSION_REWARD",
+                    amountDelta = mission.rewardChips,
+                    balanceAfter = updated.bankroll,
+                    note = "Quest Claimed: ${mission.title}"
+                )
+            )
+        }
+
+        checkLevelUp(oldLevel, updated.level)
+        return MissionClaimResult(
+            mission = mission,
+            chipsAwarded = mission.rewardChips,
+            xpAwarded = mission.rewardXp,
+            voidAwarded = mission.rewardVoid
+        )
+    }
+
+    fun unlockLoyaltyReward(rewardId: String): LoyaltyRewardUnlockResult? {
+        val current = _profile.value
+        val reward = RoyaleLoyaltyCatalog.rewards.firstOrNull { it.id == rewardId } ?: return null
+        if (!RoyaleLoyaltyCatalog.isRewardEligibleToUnlock(current, reward)) return null
+
+        val oldLevel = current.level
+        val updatedWallet = if (reward.voidReward > 0L) {
+            val newTx = VoidTransaction(
+                id = UUID.randomUUID().toString(),
+                type = VoidTxType.MINT_REWARD,
+                amount = reward.voidReward,
+                txHash = generateTxHash(),
+                timestamp = System.currentTimeMillis(),
+                note = "Loyalty Reward: ${reward.title} (+${reward.voidReward} \$VOID)"
+            )
+            current.voidWallet.copy(
+                balance = current.voidWallet.balance + reward.voidReward,
+                transactions = listOf(newTx) + current.voidWallet.transactions.take(20)
+            )
+        } else {
+            current.voidWallet
+        }
+
+        val remainingPoints = (current.royalePoints - reward.pointsCost).coerceAtLeast(0L)
+        val updated = current.copy(
+            bankroll = current.bankroll + reward.chipsReward,
+            xp = current.xp + reward.xpReward,
+            royalePoints = remainingPoints,
+            unlockedLoyaltyRewardIds = current.unlockedLoyaltyRewardIds + reward.id,
+            stats = current.stats.copy(
+                totalVoidEarned = current.stats.totalVoidEarned + reward.voidReward
+            ),
+            voidWallet = updatedWallet
+        )
+        _profile.value = updated
+        saveProfile(updated)
+        missionsRepository.syncWithProfile(updated)
+
+        ioScope.launch {
+            currencyDao.insertTransaction(
+                CurrencyTransactionEntity(
+                    gameType = "LOYALTY_REWARD",
+                    amountDelta = reward.chipsReward,
+                    balanceAfter = updated.bankroll,
+                    note = "Royale Points Unlocked: ${reward.title} (-${reward.pointsCost} RP)"
+                )
+            )
+        }
+
+        checkLevelUp(oldLevel, updated.level)
+        return LoyaltyRewardUnlockResult(
+            reward = reward,
+            chipsAwarded = reward.chipsReward,
+            xpAwarded = reward.xpReward,
+            voidAwarded = reward.voidReward,
+            remainingRoyalePoints = remainingPoints
+        )
+    }
 }

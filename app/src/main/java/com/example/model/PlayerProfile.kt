@@ -17,6 +17,7 @@ data class PlayerStats(
     val slotsSpins: Int = 0,
     val blackjackHands: Int = 0,
     val rouletteSpins: Int = 0,
+    val baccaratHands: Int = 0,
     val totalJackpots: Int = 0,
     val totalLevelUps: Int = 0,
     val totalVoidEarned: Long = 10L,
@@ -34,6 +35,9 @@ data class PlayerProfile(
     val bankroll: Long = 10000L,
     val xp: Long = 0L,
     val lastDailyBonusTime: Long = 0L,
+    val royalePoints: Long = 0L,
+    val lifetimeRoyalePoints: Long = 0L,
+    val unlockedLoyaltyRewardIds: Set<String> = emptySet(),
     val stats: PlayerStats = PlayerStats(),
     val selectedFelt: FeltTheme = FeltTheme.FIRE_KERN_FORGE,
     val selectedCardBack: CardBackTheme = CardBackTheme.ROYAL_RED,
@@ -47,6 +51,9 @@ data class PlayerProfile(
 
     val level: Int get() = levelData.first
     val xpProgressInLevel: Float get() = levelData.second
+
+    val loyaltyTier: RoyaleLoyaltyTier
+        get() = RoyaleLoyaltyTier.tierForPoints(lifetimeRoyalePoints)
 
     val maxBetAllowed: Long
         get() = when {

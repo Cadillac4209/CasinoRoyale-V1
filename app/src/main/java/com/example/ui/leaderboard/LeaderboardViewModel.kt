@@ -91,7 +91,10 @@ class LeaderboardViewModel(
         vipTitle: String,
         bestWinStreak: Int,
         biggestWin: Long,
-        totalRoundsPlayed: Int
+        totalRoundsPlayed: Int,
+        royalePoints: Long = 0L,
+        lifetimeRoyalePoints: Long = 0L,
+        loyaltyTier: String = "Ember Member"
     ) {
         viewModelScope.launch {
             _isSyncing.value = true
@@ -103,7 +106,10 @@ class LeaderboardViewModel(
                     vipTitle = vipTitle,
                     bestWinStreak = bestWinStreak,
                     biggestWin = biggestWin,
-                    totalRoundsPlayed = totalRoundsPlayed
+                    totalRoundsPlayed = totalRoundsPlayed,
+                    royalePoints = royalePoints,
+                    lifetimeRoyalePoints = lifetimeRoyalePoints,
+                    loyaltyTier = loyaltyTier
                 )
                 refreshRelativeRank(totalXp)
                 _syncMessage.value = null

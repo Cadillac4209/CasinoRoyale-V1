@@ -142,16 +142,22 @@ class LeaderboardRepository(
         vipTitle: String,
         bestWinStreak: Int,
         biggestWin: Long,
-        totalRoundsPlayed: Int
+        totalRoundsPlayed: Int,
+        royalePoints: Long = 0L,
+        lifetimeRoyalePoints: Long = 0L,
+        loyaltyTier: String = "Ember Member"
     ) {
         val uid = requireUserId()
         val safeName = displayName.trim().ifBlank { "Ember Roller" }.take(30)
         val safeVipTitle = vipTitle.trim().ifBlank { "Bronze Player" }.take(40)
+        val safeLoyaltyTier = loyaltyTier.trim().ifBlank { "Ember Member" }.take(40)
         val safeXp = totalXp.coerceIn(0L, MAX_XP)
         val safeLevel = level.coerceIn(1, 500)
         val safeStreak = bestWinStreak.coerceIn(0, 1_000_000)
         val safeBiggestWin = biggestWin.coerceIn(0L, 10_000_000_000L)
         val safeRounds = totalRoundsPlayed.coerceIn(0, 1_000_000_000)
+        val safeRoyalePoints = royalePoints.coerceIn(0L, 1_000_000_000L)
+        val safeLifetimeRoyalePoints = lifetimeRoyalePoints.coerceIn(0L, 1_000_000_000L)
 
         val docRef = db.collection(COLLECTION_LEADERBOARD).document(uid)
         try {
@@ -165,6 +171,9 @@ class LeaderboardRepository(
                     "bestWinStreak" to safeStreak,
                     "biggestWin" to safeBiggestWin,
                     "totalRoundsPlayed" to safeRounds,
+                    "royalePoints" to safeRoyalePoints,
+                    "lifetimeRoyalePoints" to safeLifetimeRoyalePoints,
+                    "loyaltyTier" to safeLoyaltyTier,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.update(updates).await()
@@ -178,6 +187,9 @@ class LeaderboardRepository(
                     "bestWinStreak" to safeStreak,
                     "biggestWin" to safeBiggestWin,
                     "totalRoundsPlayed" to safeRounds,
+                    "royalePoints" to safeRoyalePoints,
+                    "lifetimeRoyalePoints" to safeLifetimeRoyalePoints,
+                    "loyaltyTier" to safeLoyaltyTier,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )

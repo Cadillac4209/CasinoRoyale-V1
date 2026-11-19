@@ -35,7 +35,19 @@
         },
         "totalRoundsPlayed": {
           "type": "integer",
-          "description": "Total rounds played across Poker, Slots, Blackjack, and Roulette (>= 0)."
+          "description": "Total rounds played across Poker, Slots, Blackjack, Roulette, and Baccarat (>= 0)."
+        },
+        "royalePoints": {
+          "type": "integer",
+          "description": "Spendable Royale Points loyalty balance earned from gameplay volume (>= 0)."
+        },
+        "lifetimeRoyalePoints": {
+          "type": "integer",
+          "description": "Cumulative lifetime Royale Points determining the player's loyalty tier (>= 0)."
+        },
+        "loyaltyTier": {
+          "type": "string",
+          "description": "Display title of the player's Royale Loyalty Tier (1-40 chars)."
         },
         "createdAt": {
           "type": "string",
@@ -57,6 +69,71 @@
         "bestWinStreak",
         "biggestWin",
         "totalRoundsPlayed",
+        "royalePoints",
+        "lifetimeRoyalePoints",
+        "loyaltyTier",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DailyLoginRecord": {
+      "title": "DailyLoginRecord",
+      "description": "Owner-isolated daily login bonus state storing last login and claim server timestamps for streak tracking.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID matching the document ID."
+        },
+        "currentStreak": {
+          "type": "integer",
+          "description": "Current consecutive daily login bonus streak (>= 0)."
+        },
+        "bestStreak": {
+          "type": "integer",
+          "description": "Highest consecutive daily login bonus streak achieved (>= 0)."
+        },
+        "totalCheckIns": {
+          "type": "integer",
+          "description": "Total daily login bonuses claimed (>= 0)."
+        },
+        "lastClaimedChips": {
+          "type": "integer",
+          "description": "Virtual chips/credits awarded on the most recent daily login bonus claim (>= 0)."
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the user's most recent login session (FieldValue.serverTimestamp())."
+        },
+        "lastBonusClaimAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional server timestamp of the most recent daily bonus claim used to track consecutive day eligibility (FieldValue.serverTimestamp())."
+        },
+        "lastWheelSpinAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional server timestamp of the most recent 24-hour Daily Bonus wheel spin claim (FieldValue.serverTimestamp())."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the daily login record was first created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the daily login record was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "currentStreak",
+        "bestStreak",
+        "totalCheckIns",
+        "lastClaimedChips",
+        "lastLoginAt",
         "createdAt",
         "updatedAt"
       ]
@@ -68,6 +145,12 @@
         "$ref": "#/entities/LeaderboardEntry"
       },
       "description": "Global leaderboard ordered by totalXp descending; readable by signed-in players, writable only by the matching userId owner."
+    },
+    "/dailyLogins/{userId}": {
+      "schema": {
+        "$ref": "#/entities/DailyLoginRecord"
+      },
+      "description": "Per-user daily login bonus streak and server login timestamp record; readable and writable only by the matching userId owner."
     }
   }
 }

@@ -104,6 +104,7 @@ fun VoidWalletScreen(
     repository: CasinoRepository,
     soundManager: SoundManager,
     onBackClick: () -> Unit,
+    onOpenCryptoConverter: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val profile by repository.profile.collectAsState()
@@ -555,6 +556,40 @@ fun VoidWalletScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (onOpenCryptoConverter != null) {
+                Button(
+                    onClick = {
+                        soundManager.playButtonClick()
+                        onOpenCryptoConverter()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF1A163A),
+                        contentColor = NeonCyan
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp)
+                        .height(48.dp)
+                        .border(1.dp, NeonCyan.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+                        .testTag("void_open_crypto_converter_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CurrencyExchange,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "LIVE BTC / ETH BALANCE VISUALIZER >",
+                        fontWeight = FontWeight.Black,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // HOW TO EARN $VOID BANNER
             Card(

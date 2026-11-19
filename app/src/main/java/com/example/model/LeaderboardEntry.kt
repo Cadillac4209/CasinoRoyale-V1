@@ -16,6 +16,9 @@ data class LeaderboardEntry(
     val bestWinStreak: Int = 0,
     val biggestWin: Long = 0L,
     val totalRoundsPlayed: Int = 0,
+    val royalePoints: Long = 0L,
+    val lifetimeRoyalePoints: Long = 0L,
+    val loyaltyTier: String = "Ember Member",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )

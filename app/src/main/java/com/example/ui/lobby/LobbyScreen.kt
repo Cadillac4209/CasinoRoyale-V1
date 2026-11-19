@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -62,10 +63,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.audio.SoundManager
 import com.example.data.CasinoRepository
+import com.example.data.CryptoRatesUiState
+import com.example.model.CryptoAsset
+import com.example.model.DailyBonusWheelCatalog
+import com.example.model.DailyCheckInClaimResult
+import com.example.model.DailyLoginRecord
+import com.example.model.DailyWheelSpinResult
 import com.example.model.GameType
 import com.example.model.PlayerProfile
+import com.example.model.RoyaleLoyaltyCatalog
 import com.example.ui.components.CasinoTopBar
 import com.example.ui.components.SoundSettingsDialog
+import com.example.ui.converter.DualBalanceVisualizerCard
 import com.example.ui.theme.CasinoFeltDark
 import com.example.ui.theme.CasinoFeltGreen
 import com.example.ui.theme.CasinoFeltMedium
@@ -102,12 +111,25 @@ fun LobbyScreen(
     onOpenVoidWallet: () -> Unit,
     onOpenLeaderboard: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenCryptoConverter: () -> Unit = {},
+    onOpenMissions: () -> Unit = {},
+    onOpenLoyaltyRewards: () -> Unit = {},
+    cryptoRatesState: CryptoRatesUiState = CryptoRatesUiState.Loading,
+    selectedCryptoAsset: CryptoAsset = CryptoAsset.BTC,
+    onSelectCryptoAsset: (CryptoAsset) -> Unit = {},
+    onRefreshCryptoRates: () -> Unit = {},
     playerRank: Int? = null,
+    dailyLoginRecord: DailyLoginRecord? = null,
+    isDailyLoginSyncing: Boolean = false,
+    onDailyCheckInClaimed: (DailyCheckInClaimResult) -> Unit = {},
+    onDailyWheelSpun: (DailyWheelSpinResult) -> Unit = {},
+    onResetDailyCheckInCloud: () -> Unit = {},
     onEmergencyRefill: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val profile by repository.profile.collectAsState()
     val gameSpeed by repository.gameSpeed.collectAsStateWithLifecycle()
+    val missionsClaimableCount by repository.missionsRepository.claimableCount.collectAsStateWithLifecycle()
     val resumableGames by repository.activeGameRepository.resumableGameTypes
         .collectAsStateWithLifecycle(initialValue = emptySet())
     var showBonusWheel by remember { mutableStateOf(false) }
@@ -115,8 +137,20 @@ fun LobbyScreen(
     var showSoundSettings by remember { mutableStateOf(false) }
     var showDailyCheckIn by remember { mutableStateOf(false) }
     var hasPromptedDailyCheckIn by remember { mutableStateOf(false) }
+    var wheelNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
 
     val checkInStatus = remember(profile) { repository.getDailyCheckInStatus() }
+    val wheelStatus = remember(profile.lastDailyBonusTime, wheelNowMs) {
+        DailyBonusWheelCatalog.evaluateStatus(profile.lastDailyBonusTime, wheelNowMs)
+    }
+
+    LaunchedEffect(profile.lastDailyBonusTime) {
+        wheelNowMs = System.currentTimeMillis()
+        while (!DailyBonusWheelCatalog.evaluateStatus(profile.lastDailyBonusTime, wheelNowMs).canSpin) {
+            kotlinx.coroutines.delay(1000L)
+            wheelNowMs = System.currentTimeMillis()
+        }
+    }
 
     LaunchedEffect(checkInStatus.isClaimAvailableToday) {
         if (checkInStatus.isClaimAvailableToday && !hasPromptedDailyCheckIn) {
@@ -388,22 +422,42 @@ fun LobbyScreen(
                                 showBonusWheel = true
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = GoldPrimary,
-                                contentColor = Color.Black
+                                containerColor = if (wheelStatus.canSpin) GoldPrimary else FireKernCardElevated,
+                                contentColor = if (wheelStatus.canSpin) Color.Black else GoldLight
                             ),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
+                                .then(
+                                    if (!wheelStatus.canSpin) {
+                                        Modifier.border(1.dp, GoldPrimary.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                                    } else {
+                                        Modifier
+                                    }
+                                )
                                 .testTag("lobby_daily_wheel_button")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Stars,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("WHEEL", fontWeight = FontWeight.Black, fontSize = 12.sp)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Stars,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("WHEEL", fontWeight = FontWeight.Black, fontSize = 11.sp)
+                                }
+                                Text(
+                                    text = if (wheelStatus.canSpin) "SPIN READY" else wheelStatus.compactCountdown,
+                                    color = if (wheelStatus.canSpin) FireKernVoid else NeonCyan,
+                                    fontFamily = MonoFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 8.sp,
+                                    maxLines = 1
+                                )
+                            }
                         }
 
                         OutlinedButton(
@@ -639,6 +693,210 @@ fun LobbyScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // DUAL VIRTUAL CREDITS & LIVE CRYPTO EXCHANGE RATE VISUALIZER CARD
+            DualBalanceVisualizerCard(
+                virtualCredits = profile.bankroll,
+                selectedAsset = selectedCryptoAsset,
+                ratesState = cryptoRatesState,
+                onSelectAsset = { asset ->
+                    soundManager.playChipClick()
+                    onSelectCryptoAsset(asset)
+                },
+                onRefreshRates = {
+                    soundManager.playButtonClick()
+                    onRefreshCryptoRates()
+                },
+                onOpenFullConverter = {
+                    soundManager.playButtonClick()
+                    onOpenCryptoConverter()
+                },
+                modifier = Modifier.padding(horizontal = 14.dp)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ROYALE QUESTS & TROPHIES ENTRY CARD
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(
+                        width = if (missionsClaimableCount > 0) 1.5.dp else 1.dp,
+                        color = if (missionsClaimableCount > 0) Color(0xFF14F195) else GoldPrimary.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                    .clickable {
+                        soundManager.playButtonClick()
+                        onOpenMissions()
+                    }
+                    .testTag("lobby_missions_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = FireKernCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(Brush.radialGradient(listOf(GoldPrimary, FireKernEmberDark))),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.EmojiEvents,
+                            contentDescription = "Royale Quests and Trophies",
+                            tint = Color.Black,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "ROYALE QUESTS & TROPHIES",
+                            color = GoldLight,
+                            fontFamily = DisplayFontFamily,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 13.sp,
+                            letterSpacing = 0.6.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (missionsClaimableCount > 0) {
+                                "$missionsClaimableCount Completed Rewards Ready to Claim!"
+                            } else {
+                                "Daily floor quests & career milestones for Chips + XP"
+                            },
+                            color = if (missionsClaimableCount > 0) Color(0xFF14F195) else FireKernAsh,
+                            fontSize = 11.sp,
+                            fontWeight = if (missionsClaimableCount > 0) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (missionsClaimableCount > 0) Color(0xFF14F195) else FireKernEmberDark
+                            )
+                            .border(
+                                1.dp,
+                                if (missionsClaimableCount > 0) Color(0xFF14F195) else GoldPrimary,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = if (missionsClaimableCount > 0) "$missionsClaimableCount READY" else "QUESTS >",
+                            color = if (missionsClaimableCount > 0) Color.Black else GoldPrimary,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ROYALE POINTS LOYALTY CLUB ENTRY CARD
+            val loyaltyUnlockableCount = remember(profile) {
+                RoyaleLoyaltyCatalog.countUnlockableRewards(profile)
+            }
+            val loyaltyTierColor = Color(profile.loyaltyTier.colorHex)
+            val rpFormatter = remember { NumberFormat.getNumberInstance(Locale.US) }
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(
+                        width = if (loyaltyUnlockableCount > 0) 1.5.dp else 1.dp,
+                        color = if (loyaltyUnlockableCount > 0) GoldPrimary else loyaltyTierColor.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                    .clickable {
+                        soundManager.playButtonClick()
+                        onOpenLoyaltyRewards()
+                    }
+                    .testTag("lobby_loyalty_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = FireKernCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(Brush.radialGradient(listOf(loyaltyTierColor, FireKernEmberDark))),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Stars,
+                            contentDescription = "Royale Points Loyalty Club",
+                            tint = Color.Black,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "ROYALE POINTS • ${profile.loyaltyTier.title.uppercase()}",
+                            color = loyaltyTierColor,
+                            fontFamily = DisplayFontFamily,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 13.sp,
+                            letterSpacing = 0.5.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${rpFormatter.format(profile.royalePoints)} RP Available • Earn ${profile.loyaltyTier.earnMultiplier}x on play volume",
+                            color = if (loyaltyUnlockableCount > 0) NeonCyan else FireKernAsh,
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = if (loyaltyUnlockableCount > 0) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (loyaltyUnlockableCount > 0) GoldPrimary else FireKernEmberDark)
+                            .border(
+                                1.dp,
+                                if (loyaltyUnlockableCount > 0) GoldLight else loyaltyTierColor,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = if (loyaltyUnlockableCount > 0) "$loyaltyUnlockableCount UNLOCK" else "TIERS >",
+                            color = if (loyaltyUnlockableCount > 0) FireKernVoid else loyaltyTierColor,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             // SETTINGS & ACCOUNT CARD
             Card(
                 modifier = Modifier
@@ -820,6 +1078,25 @@ fun LobbyScreen(
                     },
                     testTag = "card_game_roulette"
                 )
+
+                // 5. ROYAL BACCARAT CARD
+                GameLobbyCard(
+                    title = "ROYAL BACCARAT",
+                    subtitle = "Punto Banco • Player vs Banker • Tie 8:1",
+                    badge = "PAIR 11:1",
+                    badgeColor = Color(0xFF14F195),
+                    artRes = null,
+                    customCrestText = "9",
+                    gradientColors = listOf(Color(0xFF0A2E22), FireKernCard),
+                    accentColor = Color(0xFF14F195),
+                    highlights = "Dragon Pair Side Bet • Macau Bead Road • Auto-Resume",
+                    isResumable = resumableGames.contains(GameType.BACCARAT),
+                    onClick = {
+                        soundManager.playCardDeal()
+                        onSelectGame(GameType.BACCARAT)
+                    },
+                    testTag = "card_game_baccarat"
+                )
             }
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -846,8 +1123,14 @@ fun LobbyScreen(
         // Daily Bonus Modal
         if (showBonusWheel) {
             DailyBonusWheelModal(
-                onClaimReward = { reward ->
-                    repository.claimDailyBonus(reward)
+                profile = profile,
+                dailyLoginRecord = dailyLoginRecord,
+                onSpinAndClaim = { sliceIndex ->
+                    val result = repository.claimDailyWheelSpin(sliceIndex)
+                    if (result != null) {
+                        onDailyWheelSpun(result)
+                    }
+                    result
                 },
                 onDismiss = { showBonusWheel = false },
                 soundManager = soundManager
@@ -878,11 +1161,20 @@ fun LobbyScreen(
         if (showDailyCheckIn) {
             DailyCheckInDialog(
                 status = repository.getDailyCheckInStatus(),
-                onClaimReward = { repository.claimDailyCheckIn() },
+                onClaimReward = {
+                    val result = repository.claimDailyCheckIn()
+                    onDailyCheckInClaimed(result)
+                    result
+                },
                 onSimulateNextDay = { repository.simulateNextDayForTesting() },
-                onResetStreak = { repository.resetCheckInForTesting() },
+                onResetStreak = {
+                    repository.resetCheckInForTesting()
+                    onResetDailyCheckInCloud()
+                },
                 onDismiss = { showDailyCheckIn = false },
-                soundManager = soundManager
+                soundManager = soundManager,
+                dailyLoginRecord = dailyLoginRecord,
+                isCloudSyncing = isDailyLoginSyncing
             )
         }
     }
@@ -894,11 +1186,12 @@ private fun GameLobbyCard(
     subtitle: String,
     badge: String,
     badgeColor: Color,
-    @DrawableRes artRes: Int,
+    @DrawableRes artRes: Int?,
     gradientColors: List<Color>,
     accentColor: Color,
     highlights: String,
     isResumable: Boolean = false,
+    customCrestText: String? = null,
     onClick: () -> Unit,
     testTag: String
 ) {
@@ -922,16 +1215,36 @@ private fun GameLobbyCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Classic Casino Artwork Thumbnail
-                Image(
-                    painter = painterResource(id = artRes),
-                    contentDescription = "$title artwork",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(58.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .border(1.5.dp, accentColor, RoundedCornerShape(12.dp))
-                )
+                if (artRes != null) {
+                    Image(
+                        painter = painterResource(id = artRes),
+                        contentDescription = "$title artwork",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(58.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.5.dp, accentColor, RoundedCornerShape(12.dp))
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(58.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                Brush.radialGradient(listOf(accentColor.copy(alpha = 0.35f), FireKernObsidian))
+                            )
+                            .border(1.5.dp, accentColor, RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = customCrestText ?: "♠",
+                            color = accentColor,
+                            fontFamily = DisplayFontFamily,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 24.sp
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.width(14.dp))
 

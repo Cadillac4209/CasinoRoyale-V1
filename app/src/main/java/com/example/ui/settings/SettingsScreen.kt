@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,11 +32,13 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.MusicOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Stars
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Button
@@ -46,6 +49,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -72,6 +76,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,10 +86,15 @@ import com.example.audio.SoundManager
 import com.example.audio.SoundProfilePreset
 import com.example.auth.signOutUser
 import com.example.data.CasinoRepository
+import com.example.data.MonthlySpendingLimitEngine
+import com.example.data.ResponsiblePlayManager
+import com.example.model.DailyLoginRecord
 import com.example.model.GameSpeed
 import com.example.model.LeaderboardEntry
 import com.example.model.PlayerProfile
+import com.example.model.RoyaleLoyaltyCatalog
 import com.example.ui.leaderboard.LeaderboardViewModel
+import com.example.ui.theme.CasinoRed
 import com.example.ui.theme.DisplayFontFamily
 import com.example.ui.theme.FireKernAsh
 import com.example.ui.theme.FireKernCard
@@ -112,15 +122,20 @@ import java.util.Locale
 fun SettingsScreen(
     repository: CasinoRepository,
     soundManager: SoundManager,
+    responsiblePlayManager: ResponsiblePlayManager,
     leaderboardViewModel: LeaderboardViewModel,
     profile: PlayerProfile,
     playerDisplayName: String,
+    dailyLoginRecord: DailyLoginRecord? = null,
     onUpdateDisplayName: (String) -> Unit,
     onSyncNow: () -> Unit,
+    onOpenLoyaltyRewards: () -> Unit = {},
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val gameSpeed by repository.gameSpeed.collectAsStateWithLifecycle()
+    val responsiblePlayState by responsiblePlayManager.state.collectAsStateWithLifecycle()
+    val spendingLimitState by responsiblePlayManager.spendingLimitState.collectAsStateWithLifecycle()
     val currentPlayerEntry by leaderboardViewModel.currentPlayerEntry.collectAsStateWithLifecycle()
     val currentEntryError by leaderboardViewModel.currentEntryError.collectAsStateWithLifecycle()
     val rankSummary by leaderboardViewModel.playerRankSummary.collectAsStateWithLifecycle()
@@ -137,6 +152,10 @@ fun SettingsScreen(
 
     var draftDisplayName by remember(playerDisplayName) { mutableStateOf(playerDisplayName) }
     var nameSavedNotice by remember { mutableStateOf(false) }
+    var draftMonthlyLimitText by remember(spendingLimitState.monthlyLimit) {
+        mutableStateOf(spendingLimitState.monthlyLimit.toString())
+    }
+    var limitSavedMessage by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -512,7 +531,345 @@ fun SettingsScreen(
                     }
                 }
 
-                // SECTION 3: FIRESTORE ACCOUNT & PROFILE
+                // SECTION 3: RESPONSIBLE PLAY & BREAK TIMER
+                SettingsSectionCard(
+                    title = "RESPONSIBLE PLAY & BREAKS",
+                    subtitle = "60-minute continuous gameplay reminder & confidential support",
+                    icon = Icons.Default.HealthAndSafety,
+                    accentColor = NeonCyan,
+                    modifier = Modifier.testTag("settings_responsible_play_section")
+                ) {
+                    SettingsToggleRow(
+                        icon = Icons.Default.HealthAndSafety,
+                        iconTint = if (responsiblePlayState.isBreakReminderEnabled) NeonCyan else Color.Gray,
+                        title = "60-Minute Break Reminder",
+                        subtitle = "Prompts a break after 60m of active play (resets after 5m idle/break)",
+                        checked = responsiblePlayState.isBreakReminderEnabled,
+                        onCheckedChange = { enabled ->
+                            soundManager.playButtonClick()
+                            responsiblePlayManager.setBreakReminderEnabled(enabled)
+                        },
+                        trackColor = NeonCyan,
+                        switchTag = "settings_break_timer_toggle"
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(FireKernCardElevated)
+                            .border(1.dp, FireKernCardBorder, RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "ACTIVE SESSION CLOCK",
+                                    color = GoldLight,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 11.sp
+                                )
+                                Text(
+                                    text = "${ResponsiblePlayManager.formatDuration(responsiblePlayState.continuousPlayMs)} / 60m 00s",
+                                    fontFamily = MonoFontFamily,
+                                    color = NeonCyan,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { responsiblePlayState.progressFraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = NeonCyan,
+                                trackColor = FireKernCard
+                            )
+                            Text(
+                                text = "Completed breaks logged: ${responsiblePlayState.completedBreaksCount}",
+                                color = FireKernAsh,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                soundManager.playButtonClick()
+                                responsiblePlayManager.openSupportResourcesDialog()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = NeonCyan,
+                                contentColor = FireKernVoid
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("settings_support_resources_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.HealthAndSafety,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SUPPORT HELP", fontWeight = FontWeight.Black, fontSize = 11.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                soundManager.playButtonClick()
+                                responsiblePlayManager.resetSessionTimer()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("settings_reset_break_timer_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = null,
+                                tint = GoldLight,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("RESET TIMER", color = GoldLight, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = FireKernCardBorder)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Monthly Virtual Spending Limit Sub-Panel
+                    SettingsToggleRow(
+                        icon = Icons.Default.HealthAndSafety,
+                        iconTint = if (spendingLimitState.isEnabled) GoldPrimary else Color.Gray,
+                        title = "Monthly Virtual Spending Limit",
+                        subtitle = "Prompts a confirmation dialog when reaching 80% & 100% of your monthly cap",
+                        checked = spendingLimitState.isEnabled,
+                        onCheckedChange = { enabled ->
+                            soundManager.playButtonClick()
+                            responsiblePlayManager.setMonthlyLimitEnabled(enabled)
+                            limitSavedMessage = if (enabled) {
+                                "Monthly limit alerts enabled ($${numberFormatter.format(spendingLimitState.monthlyLimit)} cap)."
+                            } else {
+                                "Monthly spending limit alerts paused."
+                            }
+                        },
+                        trackColor = GoldPrimary,
+                        switchTag = "settings_monthly_limit_toggle"
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val limitStatusColor = when {
+                        spendingLimitState.isOverLimit -> CasinoRed
+                        spendingLimitState.isApproachingOrOver -> FireKernFlame
+                        else -> NeonCyan
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(FireKernCardElevated)
+                            .border(
+                                1.dp,
+                                if (spendingLimitState.isApproachingOrOver) limitStatusColor.copy(alpha = 0.7f) else FireKernCardBorder,
+                                RoundedCornerShape(12.dp)
+                            )
+                            .padding(12.dp)
+                            .testTag("settings_monthly_limit_status_card")
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "MONTHLY SPEND (${spendingLimitState.monthKey})",
+                                    color = GoldLight,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 11.sp
+                                )
+                                Text(
+                                    text = "$${numberFormatter.format(spendingLimitState.monthlySpent)} / $${numberFormatter.format(spendingLimitState.monthlyLimit)} (${spendingLimitState.usagePercent}%)",
+                                    fontFamily = MonoFontFamily,
+                                    color = limitStatusColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { spendingLimitState.usageFraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(7.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = limitStatusColor,
+                                trackColor = FireKernCard
+                            )
+                            Text(
+                                text = "Confirmation triggers at ${spendingLimitState.warningThresholdPercent}% ($${numberFormatter.format(spendingLimitState.warningThresholdAmount)}) • Simulated virtual credits only",
+                                color = FireKernAsh,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "QUICK MONTHLY LIMIT PRESETS",
+                        color = GoldLight,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 11.sp,
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        MonthlySpendingLimitEngine.PRESET_LIMITS.forEach { preset ->
+                            val isSelected = spendingLimitState.monthlyLimit == preset
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (isSelected) GoldPrimary.copy(alpha = 0.22f) else FireKernCardElevated
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) GoldPrimary else FireKernCardBorder,
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable {
+                                        soundManager.playButtonClick()
+                                        draftMonthlyLimitText = preset.toString()
+                                        responsiblePlayManager.setMonthlyLimit(preset, enabled = true)
+                                        limitSavedMessage = "Monthly limit set to $${numberFormatter.format(preset)}."
+                                    }
+                                    .testTag("settings_limit_preset_$preset"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "$${preset / 1000}K",
+                                    fontFamily = MonoFontFamily,
+                                    color = if (isSelected) GoldPrimary else GoldLight,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "CUSTOM MONTHLY LIMIT (MIN $${numberFormatter.format(MonthlySpendingLimitEngine.MIN_MONTHLY_LIMIT)})",
+                        color = GoldLight,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 11.sp,
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = draftMonthlyLimitText,
+                            onValueChange = { raw ->
+                                draftMonthlyLimitText = raw.filter { it.isDigit() }.take(9)
+                                limitSavedMessage = null
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            placeholder = { Text("e.g. 50000", color = FireKernAsh) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = GoldPrimary,
+                                unfocusedBorderColor = FireKernCardBorder,
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                cursorColor = GoldPrimary
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_monthly_limit_input")
+                        )
+
+                        Button(
+                            onClick = {
+                                soundManager.playButtonClick()
+                                val parsed = draftMonthlyLimitText.toLongOrNull()
+                                if (parsed == null || parsed < MonthlySpendingLimitEngine.MIN_MONTHLY_LIMIT) {
+                                    limitSavedMessage = "Enter at least $${numberFormatter.format(MonthlySpendingLimitEngine.MIN_MONTHLY_LIMIT)} credits."
+                                } else {
+                                    val clamped = parsed.coerceIn(
+                                        MonthlySpendingLimitEngine.MIN_MONTHLY_LIMIT,
+                                        MonthlySpendingLimitEngine.MAX_MONTHLY_LIMIT
+                                    )
+                                    draftMonthlyLimitText = clamped.toString()
+                                    responsiblePlayManager.setMonthlyLimit(clamped, enabled = true)
+                                    limitSavedMessage = "Monthly limit updated to $${numberFormatter.format(clamped)} (alert at 80%)."
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = GoldPrimary,
+                                contentColor = FireKernVoid
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .height(52.dp)
+                                .testTag("settings_monthly_limit_save_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Save,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SET LIMIT", fontWeight = FontWeight.Black, fontSize = 12.sp)
+                        }
+                    }
+
+                    limitSavedMessage?.let { feedback ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = feedback,
+                            color = NeonCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.testTag("settings_monthly_limit_feedback")
+                        )
+                    }
+                }
+
+                // SECTION 4: FIRESTORE ACCOUNT & PROFILE
                 SettingsSectionCard(
                     title = "FIRESTORE ACCOUNT PROFILE",
                     subtitle = "Google Sign-In identity & live cloud leaderboard document",
@@ -616,6 +973,25 @@ fun SettingsScreen(
                                 value = "Level ${syncedEntry?.level ?: profile.level} • ${syncedEntry?.vipTitle ?: profile.vipTier.title}"
                             )
                             AccountMetaRow(
+                                label = "Royale Loyalty Tier",
+                                value = syncedEntry?.loyaltyTier ?: profile.loyaltyTier.title
+                            )
+                            AccountMetaRow(
+                                label = "Royale Points (Spendable)",
+                                value = "${numberFormatter.format(maxOf(profile.royalePoints, syncedEntry?.royalePoints ?: 0L))} RP",
+                                monospace = true
+                            )
+                            AccountMetaRow(
+                                label = "Lifetime Royale Points",
+                                value = "${numberFormatter.format(maxOf(profile.lifetimeRoyalePoints, syncedEntry?.lifetimeRoyalePoints ?: 0L))} RP",
+                                monospace = true
+                            )
+                            AccountMetaRow(
+                                label = "Play Volume Wagered",
+                                value = "$${numberFormatter.format(profile.stats.totalWagered)}",
+                                monospace = true
+                            )
+                            AccountMetaRow(
                                 label = "Firestore Total XP",
                                 value = "${numberFormatter.format(syncedEntry?.totalXp ?: profile.xp)} XP",
                                 monospace = true
@@ -629,6 +1005,23 @@ fun SettingsScreen(
                                 label = "Total Rounds Synced",
                                 value = numberFormatter.format(syncedEntry?.totalRoundsPlayed ?: profile.stats.totalRoundsPlayed),
                                 monospace = true
+                            )
+                            AccountMetaRow(
+                                label = "Daily Login Streak",
+                                value = "${dailyLoginRecord?.currentStreak ?: profile.stats.checkInStreak} days (Best ${dailyLoginRecord?.bestStreak ?: profile.stats.bestCheckInStreak})"
+                            )
+                            val lastWheelMs = maxOf(
+                                profile.lastDailyBonusTime,
+                                dailyLoginRecord?.lastWheelSpinAt?.toDate()?.time ?: 0L
+                            )
+                            val wheelStatus = com.example.model.DailyBonusWheelCatalog.evaluateStatus(lastWheelMs)
+                            AccountMetaRow(
+                                label = "Daily Bonus Wheel",
+                                value = if (wheelStatus.canSpin) "Free Spin Ready Now" else "Unlocks in ${wheelStatus.formattedCountdown}"
+                            )
+                            AccountMetaRow(
+                                label = "Last Firestore Login",
+                                value = formatFirestoreTimestamp(dailyLoginRecord?.lastLoginAt)
                             )
                             AccountMetaRow(
                                 label = "Last Cloud Update",
@@ -645,6 +1038,41 @@ fun SettingsScreen(
                             color = Color(0xFFFCA5A5),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val unlockableCount = RoyaleLoyaltyCatalog.countUnlockableRewards(profile)
+                    Button(
+                        onClick = {
+                            soundManager.playButtonClick()
+                            onOpenLoyaltyRewards()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GoldPrimary,
+                            contentColor = FireKernVoid
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("settings_open_loyalty_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Stars,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (unlockableCount > 0) {
+                                "ROYALE LOYALTY REWARDS ($unlockableCount READY)"
+                            } else {
+                                "OPEN ROYALE LOYALTY REWARDS"
+                            },
+                            fontWeight = FontWeight.Black,
+                            fontSize = 12.sp
                         )
                     }
 

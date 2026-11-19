@@ -537,4 +537,384 @@ class ExampleUnitTest {
     assertEquals(15L, com.example.model.GameSpeed.TURBO.scaleDelay(10L))
     assertEquals(0L, com.example.model.GameSpeed.TURBO.scaleDelay(0L))
   }
+
+  @Test
+  fun verify_continuous_play_60min_break_prompt_and_inactivity_reset() {
+    var nowMs = 1_000_000L
+    val engine = com.example.data.ContinuousPlayTimerEngine(
+      breakThresholdMs = 60L * 60L * 1000L, // 60 minutes
+      inactivityResetThresholdMs = 5L * 60L * 1000L, // 5 minutes
+      initialNowMs = nowMs
+    )
+
+    // Simulate 59 minutes of continuous play with active touches every 10 seconds
+    repeat(59 * 6) {
+      nowMs += 10_000L
+      engine.recordActivity(nowMs)
+      val triggered = engine.tick(nowMs, isReminderEnabled = true)
+      assertFalse(triggered)
+      assertFalse(engine.isBreakPromptVisible)
+    }
+    assertEquals(59L * 60L * 1000L, engine.continuousPlayMs)
+
+    // Brief 2-minute background pause preserves accumulated session time
+    engine.setForeground(false, nowMs)
+    nowMs += 2L * 60L * 1000L
+    engine.setForeground(true, nowMs)
+    assertEquals(59L * 60L * 1000L, engine.continuousPlayMs)
+
+    // Final 60 seconds reaches 60 minutes -> triggers break prompt
+    repeat(6) { index ->
+      nowMs += 10_000L
+      engine.recordActivity(nowMs)
+      val triggered = engine.tick(nowMs, isReminderEnabled = true)
+      if (index < 5) {
+        assertFalse(triggered)
+      } else {
+        assertTrue(triggered)
+      }
+    }
+    assertTrue(engine.isBreakPromptVisible)
+    assertEquals(60L * 60L * 1000L, engine.continuousPlayMs)
+
+    // Dismissing resets continuous play timer cleanly
+    engine.dismissAndReset(nowMs)
+    assertFalse(engine.isBreakPromptVisible)
+    assertEquals(0L, engine.continuousPlayMs)
+
+    // Accumulate 10 minutes of play, then go idle for 5 minutes -> resets session to 0
+    repeat(10 * 6) {
+      nowMs += 10_000L
+      engine.recordActivity(nowMs)
+      engine.tick(nowMs, isReminderEnabled = true)
+    }
+    assertEquals(10L * 60L * 1000L, engine.continuousPlayMs)
+
+    nowMs += 5L * 60L * 1000L
+    engine.tick(nowMs, isReminderEnabled = true)
+    assertEquals(0L, engine.continuousPlayMs)
+    assertFalse(engine.isBreakPromptVisible)
+
+    // Verify gambling addiction support resources are populated
+    val resources = com.example.ui.components.SupportResourcesCatalog.resources
+    assertTrue(resources.size >= 3)
+    assertTrue(resources.any { it.helplineNumber == "1-800-522-4700" })
+    assertTrue(resources.all { it.websiteUrl.startsWith("https://") })
+  }
+
+  @Test
+  fun verify_crypto_conversion_calculator_and_formatting() {
+    val btcQuote = com.example.model.CryptoQuote(
+      asset = com.example.model.CryptoAsset.BTC,
+      usdPrice = 100_000.0,
+      change24hPercent = 2.45,
+      fetchedAtMillis = 1_700_000_000_000L,
+      sourceName = "CoinGecko Live"
+    )
+    // 10,000 credits @ 1,000 credits/$1 = $10.00 reference -> 0.000100 BTC
+    val summary = com.example.model.CryptoConversionCalculator.convertCreditsToCrypto(
+      virtualCredits = 10_000L,
+      quote = btcQuote
+    )
+    assertEquals(10.0, summary.virtualUsdValue, 0.0001)
+    assertEquals(0.0001, summary.convertedAmount, 0.0000001)
+    assertEquals("0.000100 BTC", summary.formattedCryptoAmount)
+
+    // Guard negative credits and zero USD price
+    val zeroSafe = com.example.model.CryptoConversionCalculator.convertCreditsToCrypto(
+      virtualCredits = -500L,
+      quote = btcQuote.copy(usdPrice = 0.0)
+    )
+    assertEquals(0L, zeroSafe.virtualCredits)
+    assertEquals(0.0, zeroSafe.convertedAmount, 0.0)
+    assertEquals("0.000000 BTC", zeroSafe.formattedCryptoAmount)
+
+    // Formatting checks
+    assertEquals("$100,000.00", com.example.model.CryptoConversionCalculator.formatUsdPrice(100_000.0))
+    assertEquals("+2.45% (24h)", com.example.model.CryptoConversionCalculator.format24hChange(2.45))
+    assertEquals("-1.80% (24h)", com.example.model.CryptoConversionCalculator.format24hChange(-1.8))
+    assertEquals("24h N/A", com.example.model.CryptoConversionCalculator.format24hChange(null))
+  }
+
+  @Test
+  fun verify_crypto_rate_parsers_coingecko_and_coinbase() {
+    val coinGeckoJson = """
+      {
+        "bitcoin": {"usd": 92500.5, "usd_24h_change": 3.12, "last_updated_at": 1730000000},
+        "ethereum": {"usd": 3120.25, "usd_24h_change": -0.75, "last_updated_at": 1730000000},
+        "solana": {"usd": 185.4, "usd_24h_change": 5.0, "last_updated_at": 1730000000},
+        "litecoin": {"usd": 84.1, "usd_24h_change": 1.2, "last_updated_at": 1730000000}
+      }
+    """.trimIndent()
+    val parsedMap = com.example.data.remote.CryptoRateParser.parseCoinGeckoResponse(coinGeckoJson)
+    assertEquals(4, parsedMap.size)
+    assertEquals(92500.5, parsedMap[com.example.model.CryptoAsset.BTC]!!.usdPrice, 0.01)
+    assertEquals(3.12, parsedMap[com.example.model.CryptoAsset.BTC]!!.change24hPercent!!, 0.01)
+    assertEquals(1730000000000L, parsedMap[com.example.model.CryptoAsset.BTC]!!.fetchedAtMillis)
+    assertEquals("CoinGecko Live", parsedMap[com.example.model.CryptoAsset.ETH]!!.sourceName)
+
+    val coinbaseJson = """
+      {"data":{"base":"ETH","currency":"USD","amount":"3145.67"}}
+    """.trimIndent()
+    val ethQuote = com.example.data.remote.CryptoRateParser.parseCoinbaseJson(
+      asset = com.example.model.CryptoAsset.ETH,
+      json = coinbaseJson,
+      fetchedAtMillis = 1730000005000L
+    )
+    assertEquals(3145.67, ethQuote!!.usdPrice, 0.001)
+    assertEquals("Coinbase Live", ethQuote.sourceName)
+    assertEquals(com.example.model.CryptoAsset.ETH, ethQuote.asset)
+  }
+
+  @Test
+  fun verify_baccarat_punto_banco_rules_and_payouts() {
+    // Card points (Ace=1, Face/10=0) & modulo 10 scoring
+    val naturalNineHand = listOf(Card(Suit.SPADES, Rank.NINE), Card(Suit.HEARTS, Rank.KING))
+    val sevenHand = listOf(Card(Suit.DIAMONDS, Rank.THREE), Card(Suit.CLUBS, Rank.FOUR))
+    assertEquals(9, com.example.model.BaccaratRules.handScore(naturalNineHand))
+    assertEquals(7, com.example.model.BaccaratRules.handScore(sevenHand))
+
+    // Natural 9 stands immediately (no 3rd cards drawn)
+    var drawCount = 0
+    val naturalDeal = com.example.model.BaccaratRules.resolveFromCards(
+      playerInitial = naturalNineHand,
+      bankerInitial = sevenHand,
+      drawNextCard = {
+        drawCount++
+        Card(Suit.CLUBS, Rank.TWO)
+      }
+    )
+    assertTrue(naturalDeal.isNatural)
+    assertEquals(0, drawCount)
+    assertEquals(com.example.model.BaccaratOutcome.PLAYER_WIN, naturalDeal.outcome)
+
+    // Banker 3rd card tableau: Banker has 4, draws when Player 3rd card is 2..7, stands on 8
+    assertTrue(com.example.model.BaccaratRules.shouldBankerDrawThirdCard(4, 5))
+    assertFalse(com.example.model.BaccaratRules.shouldBankerDrawThirdCard(4, 8))
+    assertFalse(com.example.model.BaccaratRules.shouldBankerDrawThirdCard(3, 8))
+
+    // Payout checks: Banker 5% commission + Dragon Pair 11:1
+    val bankerAndPairPayout = com.example.model.BaccaratRules.calculatePayouts(
+      bets = mapOf(
+        com.example.model.BaccaratBetSpot.BANKER to 100L,
+        com.example.model.BaccaratBetSpot.DRAGON_PAIR to 50L
+      ),
+      outcome = com.example.model.BaccaratOutcome.BANKER_WIN,
+      hasAnyPair = true
+    )
+    // Banker: 100 + 95 = 195; Pair: 50 * 12 = 600; Total = 795
+    assertEquals(795L, bankerAndPairPayout.totalReturned)
+    assertFalse(bankerAndPairPayout.isPushOnly)
+
+    // Tie pushes Player/Banker stakes cleanly
+    val tiePush = com.example.model.BaccaratRules.calculatePayouts(
+      bets = mapOf(com.example.model.BaccaratBetSpot.PLAYER to 200L),
+      outcome = com.example.model.BaccaratOutcome.TIE,
+      hasAnyPair = false
+    )
+    assertEquals(200L, tiePush.totalReturned)
+    assertTrue(tiePush.isPushOnly)
+  }
+
+  @Test
+  fun verify_royale_missions_evaluator_and_claimable_states() {
+    val profile = PlayerProfile(
+      xp = 1000L,
+      stats = com.example.model.PlayerStats(
+        totalWagered = 30_000L,
+        biggestWin = 3_000L,
+        bestWinStreak = 4
+      )
+    )
+    val snapshot = com.example.data.MissionsSnapshotData(
+      dateKey = "2026-11-16",
+      dailyRoundsAny = 5L,
+      dailyCardRounds = 2L,
+      dailyWheelReelRounds = 4L,
+      dailyWinsAny = 3L,
+      careerWinsAny = 3L,
+      gamesSampledCount = 5L,
+      claimedIds = setOf("daily_warmup")
+    )
+    val states = com.example.data.MissionsEvaluator.buildStates(snapshot, profile)
+    val warmup = states.first { it.mission.id == "daily_warmup" }
+    val cards = states.first { it.mission.id == "daily_card_strategist" }
+    val grandTour = states.first { it.mission.id == "career_grand_tour" }
+
+    assertTrue(warmup.isCompleted)
+    assertTrue(warmup.isClaimed)
+    assertFalse(warmup.isClaimable)
+
+    assertFalse(cards.isCompleted)
+    assertEquals(2L, cards.clampedProgress)
+
+    assertTrue(grandTour.isCompleted)
+    assertTrue(grandTour.isClaimable)
+  }
+
+  @Test
+  fun verify_monthly_spending_limit_engine_thresholds_and_rollover() {
+    val engine = com.example.data.MonthlySpendingLimitEngine(
+      initialEnabled = true,
+      initialMonthlyLimit = 10_000L,
+      initialMonthlySpent = 0L,
+      initialMonthKey = "2026-11"
+    )
+
+    // Under 80% (< 8,000): no alert
+    assertEquals(
+      com.example.data.SpendingLimitAlertLevel.NONE,
+      engine.recordWager(5_000L, monthKey = "2026-11")
+    )
+    assertEquals(
+      com.example.data.SpendingLimitAlertLevel.NONE,
+      engine.recordWager(2_500L, monthKey = "2026-11")
+    )
+    assertEquals(7_500L, engine.state.monthlySpent)
+    assertFalse(engine.state.isApproachingOrOver)
+
+    // Crosses 80% threshold (7,500 + 1,000 = 8,500 >= 8,000): triggers APPROACHING_THRESHOLD
+    assertEquals(
+      com.example.data.SpendingLimitAlertLevel.APPROACHING_THRESHOLD,
+      engine.recordWager(1_000L, monthKey = "2026-11")
+    )
+    assertTrue(engine.state.isApproachingOrOver)
+    assertEquals(1_500L, engine.state.remainingBeforeLimit)
+
+    // Acknowledge 80% warning -> stays silent for wagers between 80% and 99%
+    engine.acknowledgeAlert(monthKey = "2026-11")
+    assertEquals(
+      com.example.data.SpendingLimitAlertLevel.NONE,
+      engine.recordWager(1_000L, monthKey = "2026-11")
+    )
+    assertEquals(9_500L, engine.state.monthlySpent)
+
+    // Crosses 100% threshold (9,500 + 1,000 = 10,500 >= 10,000): triggers LIMIT_REACHED
+    assertEquals(
+      com.example.data.SpendingLimitAlertLevel.LIMIT_REACHED,
+      engine.recordWager(1_000L, monthKey = "2026-11")
+    )
+    assertTrue(engine.state.isOverLimit)
+    engine.acknowledgeAlert(monthKey = "2026-11")
+    assertEquals(com.example.data.SpendingLimitAlertLevel.NONE, engine.state.pendingAlert)
+
+    // Disabling limit suppresses alerts while still tracking spend
+    engine.configureLimit(limitAmount = 5_000L, enabled = false, monthKey = "2026-11")
+    assertEquals(
+      com.example.data.SpendingLimitAlertLevel.NONE,
+      engine.recordWager(500L, monthKey = "2026-11")
+    )
+    assertEquals(11_000L, engine.state.monthlySpent)
+
+    // Calendar month rollover resets monthly spend and clears alert acknowledgments
+    assertTrue(engine.syncMonth("2026-12"))
+    assertEquals(0L, engine.state.monthlySpent)
+    assertFalse(engine.state.acknowledgedApproachingMonth)
+    assertFalse(engine.state.acknowledgedLimitReachedMonth)
+
+    // Re-enable with 10,000 cap -> lowering limit to 2,000 after spending 1,700 (85%) triggers APPROACHING_THRESHOLD
+    engine.configureLimit(limitAmount = 10_000L, enabled = true, monthKey = "2026-12")
+    engine.recordWager(1_700L, monthKey = "2026-12")
+    val tightened = engine.configureLimit(limitAmount = 2_000L, enabled = true, monthKey = "2026-12")
+    assertEquals(com.example.data.SpendingLimitAlertLevel.APPROACHING_THRESHOLD, tightened.pendingAlert)
+  }
+
+  @Test
+  fun verify_royale_loyalty_points_tiers_and_rewards_eligibility() {
+    // Earn scaling from wager volume + minimum 5 RP per wager
+    assertEquals(5L, com.example.model.RoyaleLoyaltyCatalog.calculatePointsEarned(50L, com.example.model.RoyaleLoyaltyTier.EMBER))
+    assertEquals(40L, com.example.model.RoyaleLoyaltyCatalog.calculatePointsEarned(1_000L, com.example.model.RoyaleLoyaltyTier.EMBER))
+    assertEquals(50L, com.example.model.RoyaleLoyaltyCatalog.calculatePointsEarned(1_000L, com.example.model.RoyaleLoyaltyTier.MOLTEN_GOLD))
+    assertEquals(80L, com.example.model.RoyaleLoyaltyCatalog.calculatePointsEarned(1_000L, com.example.model.RoyaleLoyaltyTier.IMPERIAL_CROWN))
+    assertEquals(0L, com.example.model.RoyaleLoyaltyCatalog.calculatePointsEarned(0L, com.example.model.RoyaleLoyaltyTier.EMBER))
+
+    // Tier classification & progression math
+    assertEquals(com.example.model.RoyaleLoyaltyTier.EMBER, com.example.model.RoyaleLoyaltyTier.tierForPoints(0L))
+    assertEquals(com.example.model.RoyaleLoyaltyTier.CRIMSON, com.example.model.RoyaleLoyaltyTier.tierForPoints(250L))
+    assertEquals(com.example.model.RoyaleLoyaltyTier.MOLTEN_GOLD, com.example.model.RoyaleLoyaltyTier.tierForPoints(1_000L))
+    assertEquals(com.example.model.RoyaleLoyaltyTier.OBSIDIAN_PLATINUM, com.example.model.RoyaleLoyaltyTier.tierForPoints(3_500L))
+    assertEquals(com.example.model.RoyaleLoyaltyTier.IMPERIAL_CROWN, com.example.model.RoyaleLoyaltyTier.tierForPoints(10_000L))
+
+    assertEquals(0.5f, com.example.model.RoyaleLoyaltyCatalog.progressToNextTier(125L), 0.01f)
+    assertEquals(125L, com.example.model.RoyaleLoyaltyCatalog.pointsRemainingToNextTier(125L))
+
+    // Reward unlock eligibility checks tier gate, point balance, and non-duplication
+    val emberReward = com.example.model.RoyaleLoyaltyCatalog.rewards.first { it.id == "ember_chips_starter" }
+    val crimsonVault = com.example.model.RoyaleLoyaltyCatalog.rewards.first { it.id == "crimson_chip_vault" }
+
+    val bronzeBalanceProfile = PlayerProfile(
+      royalePoints = 300L,
+      lifetimeRoyalePoints = 200L // Under 250 Crimson threshold even though 300 RP spendable
+    )
+    assertTrue(com.example.model.RoyaleLoyaltyCatalog.isRewardEligibleToUnlock(bronzeBalanceProfile, emberReward))
+    assertFalse(com.example.model.RoyaleLoyaltyCatalog.isRewardEligibleToUnlock(bronzeBalanceProfile, crimsonVault))
+
+    val crimsonProfile = bronzeBalanceProfile.copy(
+      royalePoints = 300L,
+      lifetimeRoyalePoints = 300L,
+      unlockedLoyaltyRewardIds = setOf(emberReward.id)
+    )
+    assertFalse(com.example.model.RoyaleLoyaltyCatalog.isRewardEligibleToUnlock(crimsonProfile, emberReward))
+    assertTrue(com.example.model.RoyaleLoyaltyCatalog.isRewardEligibleToUnlock(crimsonProfile, crimsonVault))
+    assertEquals(2, com.example.model.RoyaleLoyaltyCatalog.countUnlockableRewards(crimsonProfile))
+  }
+
+  @Test
+  fun verify_daily_bonus_wheel_catalog_cooldown_and_rotation_math() {
+    val catalog = com.example.model.DailyBonusWheelCatalog
+    val slices = catalog.slices
+    assertEquals(8, slices.size)
+    assertTrue(slices.any { it.prizeType == com.example.model.WheelPrizeType.VIRTUAL_CHIPS && it.amount >= 25_000L })
+    assertTrue(slices.any { it.prizeType == com.example.model.WheelPrizeType.ROYALE_POINTS && it.amount >= 500L })
+
+    // Never spun -> ready immediately
+    val initialStatus = catalog.evaluateStatus(lastSpinTimestampMs = 0L, currentTimeMs = 1_700_000_000_000L)
+    assertTrue(initialStatus.canSpin)
+    assertEquals(0L, initialStatus.millisUntilNextSpin)
+    assertEquals("Ready to Spin!", initialStatus.formattedCountdown)
+
+    // 1 second after spin -> locked for 23h 59m 59s
+    val spinTime = 1_700_000_000_000L
+    val lockedOneSec = catalog.evaluateStatus(lastSpinTimestampMs = spinTime, currentTimeMs = spinTime + 1_000L)
+    assertFalse(lockedOneSec.canSpin)
+    assertEquals("23h 59m 59s", lockedOneSec.formattedCountdown)
+
+    // 23h 59m 59s after spin -> still locked (1s left)
+    val almost24h = catalog.evaluateStatus(
+      lastSpinTimestampMs = spinTime,
+      currentTimeMs = spinTime + catalog.COOLDOWN_MS - 1_000L
+    )
+    assertFalse(almost24h.canSpin)
+    assertEquals(1_000L, almost24h.millisUntilNextSpin)
+    assertEquals("00h 00m 01s", almost24h.formattedCountdown)
+
+    // Exactly 24h elapsed -> unlocked
+    val unlockedAt24h = catalog.evaluateStatus(
+      lastSpinTimestampMs = spinTime,
+      currentTimeMs = spinTime + catalog.COOLDOWN_MS
+    )
+    assertTrue(unlockedAt24h.canSpin)
+    assertEquals(0L, unlockedAt24h.millisUntilNextSpin)
+
+    // Verify pointer angle alignment places every slice dead-center at top (-90 deg)
+    val sweep = 360f / slices.size
+    var rot = 0f
+    for (idx in slices.indices) {
+      rot = catalog.computeTargetRotationDegrees(
+        currentRotationDeg = rot,
+        targetSliceIndex = idx,
+        sliceCount = slices.size,
+        extraFullSpins = 5
+      )
+      val sliceCenterAtStop = ((-90f + idx * sweep + sweep / 2f + rot) % 360f + 360f) % 360f
+      assertEquals(270f, sliceCenterAtStop, 0.01f)
+    }
+
+    // Verify weighted picker always returns valid index
+    val rng = kotlin.random.Random(1234)
+    repeat(50) {
+      val picked = catalog.pickWeightedSliceIndex(rng)
+      assertTrue(picked in slices.indices)
+    }
+  }
 }

@@ -69,6 +69,7 @@ import com.example.model.CheckInDayReward
 import com.example.model.CheckInStreakStatus
 import com.example.model.DailyCheckInClaimResult
 import com.example.model.DailyCheckInSchedule
+import com.example.model.DailyLoginRecord
 import com.example.ui.theme.CasinoFeltDark
 import com.example.ui.theme.CasinoFeltMedium
 import com.example.ui.theme.CasinoRed
@@ -86,6 +87,7 @@ import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.NeonYellow
 import kotlinx.coroutines.delay
+import java.text.DateFormat
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -96,7 +98,9 @@ fun DailyCheckInDialog(
     onSimulateNextDay: () -> Unit,
     onResetStreak: () -> Unit,
     onDismiss: () -> Unit,
-    soundManager: SoundManager
+    soundManager: SoundManager,
+    dailyLoginRecord: DailyLoginRecord? = null,
+    isCloudSyncing: Boolean = false
 ) {
     var latestClaimResult by remember { mutableStateOf<DailyCheckInClaimResult?>(null) }
     var showClaimCelebration by remember { mutableStateOf(false) }
@@ -268,6 +272,44 @@ fun DailyCheckInDialog(
                                 )
                             }
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Firestore Last Login Timestamp & Cloud Sync Row
+                    val lastLoginText = remember(dailyLoginRecord?.lastLoginAt, isCloudSyncing) {
+                        val ts = dailyLoginRecord?.lastLoginAt
+                        when {
+                            ts != null -> DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, Locale.US)
+                                .format(ts.toDate())
+                            isCloudSyncing -> "Syncing to Firestore..."
+                            else -> "Awaiting Firestore sync"
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(CasinoSurfaceCard)
+                            .border(1.dp, CasinoSurfaceBorder, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .testTag("daily_checkin_firestore_sync_row"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "FIRESTORE LAST LOGIN",
+                            color = NeonCyan,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 10.sp
+                        )
+                        Text(
+                            text = lastLoginText,
+                            color = GoldLight,
+                            fontFamily = MonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 10.sp
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))

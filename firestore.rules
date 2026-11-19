@@ -47,6 +47,41 @@ service cloud.firestore {
              data.totalRoundsPlayed is int &&
              data.totalRoundsPlayed >= 0 &&
              data.totalRoundsPlayed <= 1000000000 &&
+             data.royalePoints is int &&
+             data.royalePoints >= 0 &&
+             data.royalePoints <= 1000000000 &&
+             data.lifetimeRoyalePoints is int &&
+             data.lifetimeRoyalePoints >= 0 &&
+             data.lifetimeRoyalePoints <= 1000000000 &&
+             data.loyaltyTier is string &&
+             data.loyaltyTier.size() >= 1 &&
+             data.loyaltyTier.size() <= 40 &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidDailyLoginRecord(data) {
+      return data.userId is string &&
+             data.userId == request.auth.uid &&
+             isValidId(data.userId) &&
+             data.currentStreak is int &&
+             data.currentStreak >= 0 &&
+             data.currentStreak <= 10000 &&
+             data.bestStreak is int &&
+             data.bestStreak >= 0 &&
+             data.bestStreak <= 10000 &&
+             data.totalCheckIns is int &&
+             data.totalCheckIns >= 0 &&
+             data.totalCheckIns <= 100000 &&
+             data.lastClaimedChips is int &&
+             data.lastClaimedChips >= 0 &&
+             data.lastClaimedChips <= 10000000 &&
+             data.lastLoginAt is timestamp &&
+             data.lastLoginAt <= request.time &&
+             (!('lastBonusClaimAt' in data) || (data.lastBonusClaimAt is timestamp && data.lastBonusClaimAt <= request.time)) &&
+             (!('lastWheelSpinAt' in data) || (data.lastWheelSpinAt is timestamp && data.lastWheelSpinAt <= request.time)) &&
              data.createdAt is timestamp &&
              data.createdAt <= request.time &&
              data.updatedAt is timestamp &&
@@ -70,6 +105,9 @@ service cloud.firestore {
                          'bestWinStreak',
                          'biggestWin',
                          'totalRoundsPlayed',
+                         'royalePoints',
+                         'lifetimeRoyalePoints',
+                         'loyaltyTier',
                          'createdAt',
                          'updatedAt'
                        ]) &&
@@ -82,6 +120,9 @@ service cloud.firestore {
                          'bestWinStreak',
                          'biggestWin',
                          'totalRoundsPlayed',
+                         'royalePoints',
+                         'lifetimeRoyalePoints',
+                         'loyaltyTier',
                          'createdAt',
                          'updatedAt'
                        ]) &&
@@ -101,6 +142,62 @@ service cloud.firestore {
                          'bestWinStreak',
                          'biggestWin',
                          'totalRoundsPlayed',
+                         'royalePoints',
+                         'lifetimeRoyalePoints',
+                         'loyaltyTier',
+                         'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId;
+    }
+
+    match /dailyLogins/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().keys().hasAll([
+                         'userId',
+                         'currentStreak',
+                         'bestStreak',
+                         'totalCheckIns',
+                         'lastClaimedChips',
+                         'lastLoginAt',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId',
+                         'currentStreak',
+                         'bestStreak',
+                         'totalCheckIns',
+                         'lastClaimedChips',
+                         'lastLoginAt',
+                         'lastBonusClaimAt',
+                         'lastWheelSpinAt',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       isValidDailyLoginRecord(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       isValidDailyLoginRecord(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'currentStreak',
+                         'bestStreak',
+                         'totalCheckIns',
+                         'lastClaimedChips',
+                         'lastLoginAt',
+                         'lastBonusClaimAt',
+                         'lastWheelSpinAt',
                          'updatedAt'
                        ]);
 

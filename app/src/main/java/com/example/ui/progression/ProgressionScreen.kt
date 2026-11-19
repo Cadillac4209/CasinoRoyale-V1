@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Stars
 import androidx.compose.material3.Button
@@ -37,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,12 +58,18 @@ import com.example.model.BlackjackVariant
 import com.example.model.CardBackTheme
 import com.example.model.FeltTheme
 import com.example.model.LevelMilestone
+import com.example.model.LoyaltyReward
+import com.example.model.LoyaltyRewardUnlockResult
 import com.example.model.PlayerProfile
 import com.example.model.PokerVariant
 import com.example.model.ProgressionManager
 import com.example.model.RouletteVariant
+import com.example.model.RoyaleLoyaltyCatalog
+import com.example.model.RoyaleLoyaltyTier
 import com.example.model.SlotsVariant
 import com.example.ui.components.PlayingCardView
+import java.text.NumberFormat
+import java.util.Locale
 import com.example.ui.theme.CasinoFeltDark
 import com.example.ui.theme.CasinoSurfaceBorder
 import com.example.ui.theme.CasinoSurfaceCard
@@ -85,11 +93,13 @@ fun ProgressionScreen(
     repository: CasinoRepository,
     soundManager: SoundManager,
     onBackClick: () -> Unit,
+    initialTab: Int = 0,
     modifier: Modifier = Modifier
 ) {
     val profile by repository.profile.collectAsState()
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("LEVEL ROAD", "WARDROBE", "VARIANTS & LIMITS")
+    val tabs = listOf("LEVEL ROAD", "LOYALTY REWARDS", "WARDROBE", "VARIANTS & LIMITS")
+    var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab.coerceIn(0, tabs.lastIndex)) }
+    val numberFormatter = remember { NumberFormat.getNumberInstance(Locale.US) }
 
     val nextReq = ProgressionManager.xpRequiredForNextLevel(profile.level)
     val currentProgress = profile.xpProgressInLevel
@@ -239,6 +249,43 @@ fun ProgressionScreen(
                         color = GoldPrimary,
                         trackColor = FireKernCardBorder,
                     )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Royale Points Quick Summary Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(FireKernVoid.copy(alpha = 0.65f))
+                            .border(1.dp, Color(profile.loyaltyTier.colorHex).copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Stars,
+                                contentDescription = null,
+                                tint = Color(profile.loyaltyTier.colorHex),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = profile.loyaltyTier.title.uppercase(),
+                                color = Color(profile.loyaltyTier.colorHex),
+                                fontWeight = FontWeight.Black,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Text(
+                            text = "${numberFormatter.format(profile.royalePoints)} RP Available",
+                            fontFamily = MonoFontFamily,
+                            color = NeonCyan,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
 
@@ -282,7 +329,21 @@ fun ProgressionScreen(
             Box(modifier = Modifier.weight(1f)) {
                 when (selectedTab) {
                     0 -> MilestoneRoadView(profile = profile)
-                    1 -> WardrobeCosmeticsView(
+                    1 -> LoyaltyRewardsView(
+                        profile = profile,
+                        onUnlockReward = { reward ->
+                            val result = repository.unlockLoyaltyReward(reward.id)
+                            if (result != null) {
+                                if (result.voidAwarded > 0L) {
+                                    soundManager.playBigWin()
+                                } else {
+                                    soundManager.playWin()
+                                }
+                            }
+                            result
+                        }
+                    )
+                    2 -> WardrobeCosmeticsView(
                         profile = profile,
                         onSelectFelt = {
                             soundManager.playChipClick()
@@ -293,7 +354,7 @@ fun ProgressionScreen(
                             repository.selectCardBack(it)
                         }
                     )
-                    2 -> VariantsAndLimitsView(
+                    3 -> VariantsAndLimitsView(
                         profile = profile,
                         onSelectPoker = {
                             soundManager.playButtonClick()
@@ -315,6 +376,282 @@ fun ProgressionScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LoyaltyRewardsView(
+    profile: PlayerProfile,
+    onUnlockReward: (LoyaltyReward) -> LoyaltyRewardUnlockResult?
+) {
+    val numberFormatter = remember { NumberFormat.getNumberInstance(Locale.US) }
+    var lastUnlockResult by remember { mutableStateOf<LoyaltyRewardUnlockResult?>(null) }
+
+    val currentTier = profile.loyaltyTier
+    val nextTier = RoyaleLoyaltyTier.nextTierAfter(currentTier)
+    val tierProgress = RoyaleLoyaltyCatalog.progressToNextTier(profile.lifetimeRoyalePoints)
+    val pointsNeeded = RoyaleLoyaltyCatalog.pointsRemainingToNextTier(profile.lifetimeRoyalePoints)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Loyalty Tier & Gameplay Volume Card
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(FireKernCardElevated)
+                .border(1.5.dp, Color(currentTier.colorHex), RoundedCornerShape(16.dp))
+                .padding(14.dp)
+                .testTag("loyalty_tier_summary_card")
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "ROYALE LOYALTY TIER",
+                            color = FireKernAsh,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp
+                        )
+                        Text(
+                            text = currentTier.title.uppercase(),
+                            fontFamily = DisplayFontFamily,
+                            color = Color(currentTier.colorHex),
+                            fontWeight = FontWeight.Black,
+                            fontSize = 18.sp
+                        )
+                        Text(
+                            text = currentTier.perkSummary,
+                            color = GoldLight,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(FireKernVoid)
+                            .border(1.dp, NeonCyan.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "${numberFormatter.format(profile.royalePoints)} RP",
+                                fontFamily = MonoFontFamily,
+                                color = NeonCyan,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                text = "SPENDABLE",
+                                color = FireKernAsh,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                LinearProgressIndicator(
+                    progress = { tierProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = Color(currentTier.colorHex),
+                    trackColor = FireKernCard
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Lifetime: ${numberFormatter.format(profile.lifetimeRoyalePoints)} RP • Volume: $${numberFormatter.format(profile.stats.totalWagered)}",
+                        fontFamily = MonoFontFamily,
+                        color = FireKernAsh,
+                        fontSize = 10.sp
+                    )
+                    Text(
+                        text = if (nextTier != null) "${numberFormatter.format(pointsNeeded)} RP to ${nextTier.title}" else "Max Tier!",
+                        fontFamily = MonoFontFamily,
+                        color = GoldPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        }
+
+        lastUnlockResult?.let { unlocked ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF064E3B))
+                    .border(1.dp, Color(0xFF14F195), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+                    .testTag("loyalty_unlock_banner")
+            ) {
+                val voidPart = if (unlocked.voidAwarded > 0L) ", +${unlocked.voidAwarded} \$VOID" else ""
+                Text(
+                    text = "Unlocked ${unlocked.reward.title}: +$${numberFormatter.format(unlocked.chipsAwarded)} Chips, +${numberFormatter.format(unlocked.xpAwarded)} XP$voidPart!",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Text(
+            text = "TIERED ROYALE POINT REWARDS",
+            color = GoldPrimary,
+            fontFamily = DisplayFontFamily,
+            fontWeight = FontWeight.Black,
+            fontSize = 14.sp,
+            letterSpacing = 0.8.sp
+        )
+
+        RoyaleLoyaltyCatalog.rewards.forEach { reward ->
+            val isUnlocked = profile.unlockedLoyaltyRewardIds.contains(reward.id)
+            val isTierMet = profile.lifetimeRoyalePoints >= reward.requiredTier.minLifetimePoints
+            val hasEnoughPoints = profile.royalePoints >= reward.pointsCost
+            val canUnlock = !isUnlocked && isTierMet && hasEnoughPoints
+            val tierColor = Color(reward.requiredTier.colorHex)
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (isUnlocked) Color(0xFF064E3B).copy(alpha = 0.35f) else FireKernCard)
+                    .border(
+                        width = if (canUnlock) 1.5.dp else 1.dp,
+                        color = when {
+                            isUnlocked -> Color(0xFF10B981)
+                            canUnlock -> GoldPrimary
+                            else -> FireKernCardBorder
+                        },
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    .padding(14.dp)
+                    .testTag("loyalty_reward_card_${reward.id}")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(FireKernEmberDark)
+                            .border(1.dp, tierColor, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(text = reward.badgeEmoji, fontSize = 20.sp)
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = reward.title,
+                                color = Color.White,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 14.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${reward.requiredTier.title} (${numberFormatter.format(reward.requiredTier.minLifetimePoints)}+ lifetime RP)",
+                            color = tierColor,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = reward.description,
+                            color = FireKernAsh,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val rewardPayoutText = buildString {
+                        append("+$${numberFormatter.format(reward.chipsReward)} Chips")
+                        append(" • +${numberFormatter.format(reward.xpReward)} XP")
+                        if (reward.voidReward > 0L) {
+                            append(" • +${reward.voidReward} \$VOID")
+                        }
+                    }
+                    Text(
+                        text = rewardPayoutText,
+                        fontFamily = MonoFontFamily,
+                        color = GoldLight,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            val unlocked = onUnlockReward(reward)
+                            if (unlocked != null) {
+                                lastUnlockResult = unlocked
+                            }
+                        },
+                        enabled = canUnlock,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GoldPrimary,
+                            contentColor = FireKernVoid,
+                            disabledContainerColor = if (isUnlocked) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF1E293B),
+                            disabledContentColor = if (isUnlocked) Color(0xFF14F195) else FireKernAsh.copy(alpha = 0.7f)
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("loyalty_unlock_${reward.id}")
+                    ) {
+                        Text(
+                            text = when {
+                                isUnlocked -> "UNLOCKED"
+                                !isTierMet -> "TIER LOCKED"
+                                !hasEnoughPoints -> "${numberFormatter.format(reward.pointsCost)} RP"
+                                else -> "UNLOCK (${numberFormatter.format(reward.pointsCost)} RP)"
+                            },
+                            fontWeight = FontWeight.Black,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 

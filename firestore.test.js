@@ -25,6 +25,24 @@ function validEntry(uid, overrides = {}) {
     bestWinStreak: 5,
     biggestWin: 12000,
     totalRoundsPlayed: 42,
+    royalePoints: 450,
+    lifetimeRoyalePoints: 600,
+    loyaltyTier: "Crimson Preferred",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function validDailyLogin(uid, overrides = {}) {
+  const now = new Date(Date.now() - 1000);
+  return {
+    userId: uid,
+    currentStreak: 0,
+    bestStreak: 0,
+    totalCheckIns: 0,
+    lastClaimedChips: 0,
+    lastLoginAt: now,
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -55,10 +73,12 @@ beforeEach(async () => {
   }
 });
 
-test("Unauthenticated user: cannot read or write leaderboard", async () => {
+test("Unauthenticated user: cannot read or write leaderboard or dailyLogins", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
   await assertFails(unauthDb.collection("leaderboard").orderBy("totalXp", "desc").limit(100).get());
   await assertFails(unauthDb.collection("leaderboard").doc(ALICE_UID).set(validEntry(ALICE_UID)));
+  await assertFails(unauthDb.collection("dailyLogins").doc(ALICE_UID).get());
+  await assertFails(unauthDb.collection("dailyLogins").doc(ALICE_UID).set(validDailyLogin(ALICE_UID)));
 });
 
 test("Authenticated user: can create and update their own leaderboard entry", async () => {
@@ -98,7 +118,7 @@ test("Cross-user write isolation: Alice cannot create, update, or delete Bob's l
   await assertFails(aliceDb.collection("leaderboard").doc(BOB_UID).delete());
 });
 
-test("Shadow update & schema tampering: rejects ghost fields", async () => {
+test("Shadow update & schema tampering: rejects ghost fields on leaderboard", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   await assertFails(
     aliceDb.collection("leaderboard").doc(ALICE_UID).set({
@@ -108,19 +128,96 @@ test("Shadow update & schema tampering: rejects ghost fields", async () => {
   );
 });
 
-test("Value poisoning: rejects negative XP, empty displayName, or invalid level", async () => {
+test("Value poisoning: rejects negative XP, negative Royale Points, empty displayName, or invalid level", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   await assertFails(aliceDb.collection("leaderboard").doc(ALICE_UID).set(validEntry(ALICE_UID, { totalXp: -10 })));
+  await assertFails(aliceDb.collection("leaderboard").doc(ALICE_UID).set(validEntry(ALICE_UID, { royalePoints: -5 })));
   await assertFails(aliceDb.collection("leaderboard").doc(ALICE_UID).set(validEntry(ALICE_UID, { displayName: "" })));
   await assertFails(aliceDb.collection("leaderboard").doc(ALICE_UID).set(validEntry(ALICE_UID, { level: 0 })));
 });
 
-test("Immutability guard: cannot alter userId or createdAt on update", async () => {
+test("Immutability guard: cannot alter userId or createdAt on leaderboard update", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   await assertSucceeds(aliceDb.collection("leaderboard").doc(ALICE_UID).set(validEntry(ALICE_UID)));
 
   await assertFails(
     aliceDb.collection("leaderboard").doc(ALICE_UID).update({
+      createdAt: new Date(Date.now() - 100),
+    })
+  );
+});
+
+test("DailyLogins: owner can create on login, update on bonus claim, and read own doc", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await assertSucceeds(aliceDb.collection("dailyLogins").doc(ALICE_UID).set(validDailyLogin(ALICE_UID)));
+  await assertSucceeds(aliceDb.collection("dailyLogins").doc(ALICE_UID).get());
+
+  // Claim daily login bonus updates streak, claimed chips, lastLoginAt, lastBonusClaimAt, updatedAt
+  const claimNow = new Date(Date.now() - 500);
+  await assertSucceeds(
+    aliceDb.collection("dailyLogins").doc(ALICE_UID).update({
+      currentStreak: 1,
+      bestStreak: 1,
+      totalCheckIns: 1,
+      lastClaimedChips: 1500,
+      lastLoginAt: claimNow,
+      lastBonusClaimAt: claimNow,
+      updatedAt: claimNow,
+    })
+  );
+
+  // Claim 24h daily wheel spin updates lastWheelSpinAt cleanly; future timestamp rejected
+  const wheelNow = new Date(Date.now() - 250);
+  await assertSucceeds(
+    aliceDb.collection("dailyLogins").doc(ALICE_UID).update({
+      lastWheelSpinAt: wheelNow,
+      lastLoginAt: wheelNow,
+      updatedAt: wheelNow,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("dailyLogins").doc(ALICE_UID).update({
+      lastWheelSpinAt: new Date(Date.now() + 60000),
+      updatedAt: wheelNow,
+    })
+  );
+
+  // Scoped query matching userId succeeds; unfiltered list fails
+  await assertSucceeds(aliceDb.collection("dailyLogins").where("userId", "==", ALICE_UID).get());
+  await assertFails(aliceDb.collection("dailyLogins").get());
+});
+
+test("DailyLogins cross-user isolation & tampering guards", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("dailyLogins").doc(BOB_UID).set(validDailyLogin(BOB_UID, { currentStreak: 4 }));
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  // Cross-user get, write, update, delete fail
+  await assertFails(aliceDb.collection("dailyLogins").doc(BOB_UID).get());
+  await assertFails(aliceDb.collection("dailyLogins").doc(BOB_UID).set(validDailyLogin(ALICE_UID)));
+  await assertFails(aliceDb.collection("dailyLogins").doc(BOB_UID).update({ currentStreak: 99 }));
+  await assertFails(aliceDb.collection("dailyLogins").doc(BOB_UID).delete());
+
+  // Reject ghost fields, negative streak/chips, future timestamps, and immutable field mutation
+  await assertFails(
+    aliceDb.collection("dailyLogins").doc(ALICE_UID).set({
+      ...validDailyLogin(ALICE_UID),
+      id: ALICE_UID,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("dailyLogins").doc(ALICE_UID).set(validDailyLogin(ALICE_UID, { currentStreak: -1 }))
+  );
+  await assertFails(
+    aliceDb.collection("dailyLogins").doc(ALICE_UID).set(
+      validDailyLogin(ALICE_UID, { lastLoginAt: new Date(Date.now() + 60000) })
+    )
+  );
+
+  await assertSucceeds(aliceDb.collection("dailyLogins").doc(ALICE_UID).set(validDailyLogin(ALICE_UID)));
+  await assertFails(
+    aliceDb.collection("dailyLogins").doc(ALICE_UID).update({
       createdAt: new Date(Date.now() - 100),
     })
   );

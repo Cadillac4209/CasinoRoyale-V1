@@ -214,6 +214,25 @@ data class ActiveRouletteSnapshot(
     val statusMessage: String
 )
 
+@JsonClass(generateAdapter = true)
+data class ActiveBaccaratSnapshot(
+    val selectedChip: String,
+    val playerBet: Long,
+    val bankerBet: Long,
+    val tieBet: Long,
+    val pairBet: Long,
+    val previousPlayerBet: Long,
+    val previousBankerBet: Long,
+    val previousTieBet: Long,
+    val previousPairBet: Long,
+    val isDealing: Boolean,
+    val playerCards: List<CardSnapshot>,
+    val bankerCards: List<CardSnapshot>,
+    val historyCodes: List<String>,
+    val statusMessage: String,
+    val remainingShoeCards: List<CardSnapshot>
+)
+
 object GameStateJsonCodec {
     private val moshi: Moshi = Moshi.Builder().build()
 
@@ -221,6 +240,7 @@ object GameStateJsonCodec {
     private val slotsAdapter = moshi.adapter(ActiveSlotsSnapshot::class.java)
     private val videoPokerAdapter = moshi.adapter(ActiveVideoPokerSnapshot::class.java)
     private val rouletteAdapter = moshi.adapter(ActiveRouletteSnapshot::class.java)
+    private val baccaratAdapter = moshi.adapter(ActiveBaccaratSnapshot::class.java)
 
     fun encodeBlackjack(snapshot: ActiveBlackjackSnapshot): String = blackjackAdapter.toJson(snapshot)
     fun decodeBlackjack(json: String): ActiveBlackjackSnapshot? = runCatching {
@@ -240,6 +260,11 @@ object GameStateJsonCodec {
     fun encodeRoulette(snapshot: ActiveRouletteSnapshot): String = rouletteAdapter.toJson(snapshot)
     fun decodeRoulette(json: String): ActiveRouletteSnapshot? = runCatching {
         rouletteAdapter.fromJson(json)
+    }.getOrNull()
+
+    fun encodeBaccarat(snapshot: ActiveBaccaratSnapshot): String = baccaratAdapter.toJson(snapshot)
+    fun decodeBaccarat(json: String): ActiveBaccaratSnapshot? = runCatching {
+        baccaratAdapter.fromJson(json)
     }.getOrNull()
 }
 
@@ -344,6 +369,28 @@ class ActiveGameRepository(
     suspend fun loadRouletteState(): ActiveRouletteSnapshot? {
         val entity = activeGameStateDao.getActiveGameState(GameType.ROULETTE.name) ?: return null
         return GameStateJsonCodec.decodeRoulette(entity.statePayloadJson)
+    }
+
+    suspend fun saveBaccaratState(
+        snapshot: ActiveBaccaratSnapshot,
+        isInProgress: Boolean,
+        currentBet: Long
+    ) {
+        activeGameStateDao.upsertActiveGameState(
+            ActiveGameStateEntity(
+                gameType = GameType.BACCARAT.name,
+                isInProgress = isInProgress,
+                stageLabel = if (snapshot.isDealing) "DEALING" else "BETTING",
+                currentBet = currentBet,
+                statePayloadJson = GameStateJsonCodec.encodeBaccarat(snapshot),
+                updatedTimestamp = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun loadBaccaratState(): ActiveBaccaratSnapshot? {
+        val entity = activeGameStateDao.getActiveGameState(GameType.BACCARAT.name) ?: return null
+        return GameStateJsonCodec.decodeBaccarat(entity.statePayloadJson)
     }
 
     suspend fun clearGameState(gameType: GameType) {

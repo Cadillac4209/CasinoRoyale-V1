@@ -104,6 +104,7 @@ fun StatsDialog(
                 StatCardRow("Slots Spins", "${stats.slotsSpins}", FireKernAsh)
                 StatCardRow("Blackjack Hands", "${stats.blackjackHands}", FireKernAsh)
                 StatCardRow("Roulette Spins", "${stats.rouletteSpins}", FireKernAsh)
+                StatCardRow("Baccarat Hands", "${stats.baccaratHands}", FireKernAsh)
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Box(
